@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { chat, createChatOptions } from '@tanstack/ai'
 import { createAnthropicChat } from '@tanstack/ai-anthropic'
 import { codeExecutionTool } from '@tanstack/ai-anthropic/tools'
+import type { StreamChunk } from '@tanstack/ai'
 
 const DUMMY_KEY = 'sk-ant-e2e-test-dummy-key'
 
@@ -36,7 +37,12 @@ function makeSyntheticAnthropicStream(): ReadableStream<Uint8Array> {
         model: 'claude-sonnet-4-5',
         stop_reason: null,
         stop_sequence: null,
-        usage: { input_tokens: 5, output_tokens: 0 },
+        usage: {
+          input_tokens: 5,
+          output_tokens: 0,
+          cache_creation_input_tokens: 3,
+          cache_read_input_tokens: 2,
+        },
       },
     },
     {
@@ -115,9 +121,10 @@ export const Route = createFileRoute('/api/anthropic-skills-wire')({
         const adapter = createAnthropicChat('claude-sonnet-4-5', DUMMY_KEY, {
           fetch: capturingFetch,
         })
+        let usage: Extract<StreamChunk, { type: 'RUN_FINISHED' }>['usage']
 
         try {
-          for await (const _ of chat({
+          for await (const chunk of chat({
             ...createChatOptions({ adapter }),
             messages: [
               {
@@ -140,7 +147,9 @@ export const Route = createFileRoute('/api/anthropic-skills-wire')({
               ),
             ],
           })) {
-            // Drain the stream.
+            if (chunk.type === 'RUN_FINISHED') {
+              usage = chunk.usage
+            }
           }
         } catch (error) {
           return new Response(
@@ -152,10 +161,13 @@ export const Route = createFileRoute('/api/anthropic-skills-wire')({
           )
         }
 
-        return new Response(JSON.stringify({ ok: true, capturedRequest }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        })
+        return new Response(
+          JSON.stringify({ ok: true, capturedRequest, usage }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        )
       },
     },
   },

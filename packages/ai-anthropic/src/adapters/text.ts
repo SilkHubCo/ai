@@ -61,6 +61,41 @@ import type {
 import type { AnthropicClientConfig } from '../utils'
 import type { AnthropicMessagesClient } from '../utils/client'
 
+type AnthropicStreamUsage = Anthropic_SDK.Beta.BetaMessageDeltaUsage
+type UsageBearingRunError = Extract<StreamChunk, { type: 'RUN_ERROR' }> & {
+  usage?: Extract<StreamChunk, { type: 'RUN_FINISHED' }>['usage']
+}
+
+function mergeAnthropicStreamUsage(
+  current:
+    | Anthropic_SDK.Beta.BetaUsage
+    | Anthropic_SDK.Beta.BetaMessageDeltaUsage,
+  next: Anthropic_SDK.Beta.BetaMessageDeltaUsage,
+): AnthropicStreamUsage {
+  return {
+    cache_creation_input_tokens:
+      next.cache_creation_input_tokens ?? current.cache_creation_input_tokens,
+    cache_read_input_tokens:
+      next.cache_read_input_tokens ?? current.cache_read_input_tokens,
+    input_tokens: next.input_tokens ?? current.input_tokens,
+    iterations: next.iterations ?? current.iterations,
+    output_tokens: next.output_tokens,
+    output_tokens_details:
+      next.output_tokens_details ?? current.output_tokens_details,
+    server_tool_use: next.server_tool_use ?? current.server_tool_use,
+  }
+}
+
+function attachAnthropicUsage(
+  chunk: Extract<StreamChunk, { type: 'RUN_ERROR' }>,
+  usage: AnthropicStreamUsage | undefined,
+): UsageBearingRunError {
+  const normalizedUsage = buildAnthropicUsage(usage)
+  if (!normalizedUsage) return chunk
+
+  return { ...chunk, usage: normalizedUsage }
+}
+
 /**
  * The block type carried by an Anthropic provider-executed (server) tool's
  * stored result. Mirrors the `*_tool_result` block emitted by the streaming
@@ -950,6 +985,17 @@ export class AnthropicTextAdapter<
     let hasEmittedRunStarted = false
     let hasEmittedTextMessageStart = false
     let hasEmittedRunFinished = false
+    let streamUsage: AnthropicStreamUsage | undefined
+    const createRunFinishedChunk = (finishReason: 'stop' | 'tool_calls') =>
+      ({
+        type: EventType.RUN_FINISHED,
+        runId,
+        threadId,
+        model,
+        timestamp: Date.now(),
+        finishReason,
+        usage: buildAnthropicUsage(streamUsage),
+      }) satisfies StreamChunk
     // Track current content block type for proper content_block_stop handling
     let currentBlockType: string | null = null
 
@@ -971,7 +1017,9 @@ export class AnthropicTextAdapter<
           }
         }
 
-        if (event.type === 'content_block_start') {
+        if (event.type === 'message_start') {
+          streamUsage = event.message.usage
+        } else if (event.type === 'content_block_start') {
           currentBlockType = event.content_block.type
           if (event.content_block.type === 'tool_use') {
             currentToolIndex++
@@ -1337,7 +1385,10 @@ export class AnthropicTextAdapter<
               finishReason: 'stop',
             }
           }
-        } else if (event.type === 'message_delta') {
+        } else {
+          streamUsage = streamUsage
+            ? mergeAnthropicStreamUsage(streamUsage, event.usage)
+            : event.usage
           if (event.delta.stop_reason) {
             hasEmittedRunFinished = true
 
@@ -1360,31 +1411,26 @@ export class AnthropicTextAdapter<
 
             switch (event.delta.stop_reason) {
               case 'tool_use': {
-                yield {
-                  type: EventType.RUN_FINISHED,
-                  runId,
-                  threadId,
-                  model,
-                  timestamp: Date.now(),
-                  finishReason: 'tool_calls',
-                  usage: buildAnthropicUsage(event.usage),
-                }
+                yield createRunFinishedChunk('tool_calls')
                 break
               }
               case 'max_tokens': {
-                yield {
-                  type: EventType.RUN_ERROR,
-                  model,
-                  timestamp: Date.now(),
-                  message:
-                    'The response was cut off because the maximum token limit was reached.',
-                  code: 'max_tokens',
-                  error: {
+                yield attachAnthropicUsage(
+                  {
+                    type: EventType.RUN_ERROR,
+                    model,
+                    timestamp: Date.now(),
                     message:
                       'The response was cut off because the maximum token limit was reached.',
                     code: 'max_tokens',
+                    error: {
+                      message:
+                        'The response was cut off because the maximum token limit was reached.',
+                      code: 'max_tokens',
+                    },
                   },
-                }
+                  streamUsage,
+                )
                 break
               }
               case 'stop_sequence':
@@ -1398,15 +1444,7 @@ export class AnthropicTextAdapter<
                 // generic "stop" finish reason — they describe *why* the
                 // stream ended, but for AG-UI consumers the resulting event
                 // shape is identical.
-                yield {
-                  type: EventType.RUN_FINISHED,
-                  runId,
-                  threadId,
-                  model,
-                  timestamp: Date.now(),
-                  finishReason: 'stop',
-                  usage: buildAnthropicUsage(event.usage),
-                }
+                yield createRunFinishedChunk('stop')
               }
             }
           }
@@ -1420,19 +1458,22 @@ export class AnthropicTextAdapter<
         error,
         source: 'anthropic.processAnthropicStream',
       })
-      yield {
-        type: EventType.RUN_ERROR,
-        model,
-        timestamp: Date.now(),
-        message: err.message || 'Unknown error occurred',
-        code: err.code || String(err.status),
-        // Forward the Anthropic SDK error's `.error` response body when present.
-        ...(rawEvent !== undefined && { rawEvent }),
-        error: {
+      yield attachAnthropicUsage(
+        {
+          type: EventType.RUN_ERROR,
+          model,
+          timestamp: Date.now(),
           message: err.message || 'Unknown error occurred',
           code: err.code || String(err.status),
+          // Forward the Anthropic SDK error's `.error` response body when present.
+          ...(rawEvent !== undefined && { rawEvent }),
+          error: {
+            message: err.message || 'Unknown error occurred',
+            code: err.code || String(err.status),
+          },
         },
-      }
+        streamUsage,
+      )
     }
   }
 }

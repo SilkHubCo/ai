@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { chat } from '@tanstack/ai'
 import { AnthropicTextAdapter } from '../src/adapters/text'
-import type { StreamChunk } from '@tanstack/ai'
+import type { ChatMiddleware, StreamChunk } from '@tanstack/ai'
 
 const mocks = vi.hoisted(() => {
   const betaMessagesCreate = vi.fn()
@@ -45,12 +45,47 @@ function createMockStream(
   }
 }
 
+async function collectMockStream(
+  stream: AsyncIterable<Record<string, unknown>>,
+  middleware?: ChatMiddleware,
+): Promise<Array<StreamChunk>> {
+  mocks.betaMessagesCreate.mockResolvedValueOnce(stream)
+
+  const chunks: Array<StreamChunk> = []
+  for await (const chunk of chat({
+    adapter: createAdapter(),
+    messages: [{ role: 'user', content: 'Hello' }],
+    ...(middleware ? { middleware: [middleware] } : {}),
+  })) {
+    chunks.push(chunk)
+  }
+  return chunks
+}
+
+type UsageLifecycleEvent = 'RUN_FINISHED' | 'onUsage' | 'RUN_ERROR'
+
+function createUsageLifecycleMiddleware(
+  lifecycle: Array<UsageLifecycleEvent>,
+): ChatMiddleware {
+  return {
+    name: 'usage-lifecycle',
+    onChunk(_ctx, chunk) {
+      if (chunk.type === 'RUN_FINISHED' || chunk.type === 'RUN_ERROR') {
+        lifecycle.push(chunk.type)
+      }
+    },
+    onUsage() {
+      lifecycle.push('onUsage')
+    },
+  }
+}
+
 describe('Anthropic usage extraction', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('extracts basic token usage from message_delta', async () => {
+  it('combines GCP Agent Platform message_start input usage with message_delta output usage', async () => {
     const mockStream = createMockStream([
       {
         type: 'message_start',
@@ -80,7 +115,6 @@ describe('Anthropic usage extraction', () => {
         type: 'message_delta',
         delta: { stop_reason: 'end_turn' },
         usage: {
-          input_tokens: 100,
           output_tokens: 50,
         },
       },
@@ -89,15 +123,7 @@ describe('Anthropic usage extraction', () => {
       },
     ])
 
-    mocks.betaMessagesCreate.mockResolvedValueOnce(mockStream)
-
-    const chunks: Array<StreamChunk> = []
-    for await (const chunk of chat({
-      adapter: createAdapter(),
-      messages: [{ role: 'user', content: 'Hello' }],
-    })) {
-      chunks.push(chunk)
-    }
+    const chunks = await collectMockStream(mockStream)
 
     const doneChunk = chunks.find((c) => c.type === 'RUN_FINISHED')
     expect(doneChunk).toBeDefined()
@@ -108,7 +134,7 @@ describe('Anthropic usage extraction', () => {
     })
   })
 
-  it('extracts cache token details', async () => {
+  it('preserves GCP Agent Platform message_start cache usage', async () => {
     const mockStream = createMockStream([
       {
         type: 'message_start',
@@ -140,10 +166,7 @@ describe('Anthropic usage extraction', () => {
         type: 'message_delta',
         delta: { stop_reason: 'end_turn' },
         usage: {
-          input_tokens: 100,
           output_tokens: 50,
-          cache_creation_input_tokens: 50,
-          cache_read_input_tokens: 25,
         },
       },
       {
@@ -151,21 +174,129 @@ describe('Anthropic usage extraction', () => {
       },
     ])
 
-    mocks.betaMessagesCreate.mockResolvedValueOnce(mockStream)
-
-    const chunks: Array<StreamChunk> = []
-    for await (const chunk of chat({
-      adapter: createAdapter(),
-      messages: [{ role: 'user', content: 'Hello' }],
-    })) {
-      chunks.push(chunk)
-    }
+    const chunks = await collectMockStream(mockStream)
 
     const doneChunk = chunks.find((c) => c.type === 'RUN_FINISHED')
     expect(doneChunk).toBeDefined()
+    expect(doneChunk?.usage).toMatchObject({
+      promptTokens: 175,
+      completionTokens: 50,
+      totalTokens: 225,
+    })
     expect(doneChunk?.usage?.promptTokensDetails).toEqual({
       cacheWriteTokens: 50,
       cachedTokens: 25,
+    })
+    expect(
+      (doneChunk?.usage?.promptTokens ?? 0) -
+        (doneChunk?.usage?.promptTokensDetails?.cacheWriteTokens ?? 0) -
+        (doneChunk?.usage?.promptTokensDetails?.cachedTokens ?? 0),
+    ).toBe(100)
+  })
+
+  it('attaches GCP Agent Platform usage to a max_tokens error without finishing the run', async () => {
+    const mockStream = createMockStream([
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_123',
+          type: 'message',
+          role: 'assistant',
+          content: [],
+          model: 'claude-opus-4-1',
+          usage: {
+            input_tokens: 100,
+            output_tokens: 0,
+            cache_creation_input_tokens: 40,
+            cache_read_input_tokens: 25,
+          },
+        },
+      },
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'Truncated response' },
+      },
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'max_tokens' },
+        usage: {
+          output_tokens: 50,
+        },
+      },
+      {
+        type: 'message_stop',
+      },
+    ])
+    const lifecycle: Array<UsageLifecycleEvent> = []
+    const chunks = await collectMockStream(
+      mockStream,
+      createUsageLifecycleMiddleware(lifecycle),
+    )
+
+    expect(lifecycle).toEqual(['RUN_ERROR'])
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'RUN_ERROR',
+      usage: {
+        promptTokens: 165,
+        completionTokens: 50,
+        totalTokens: 215,
+        promptTokensDetails: {
+          cacheWriteTokens: 40,
+          cachedTokens: 25,
+        },
+      },
+    })
+  })
+
+  it('attaches known GCP Agent Platform usage to a stream error without finishing the run', async () => {
+    const mockStream: AsyncIterable<Record<string, unknown>> = {
+      async *[Symbol.asyncIterator]() {
+        yield {
+          type: 'message_start',
+          message: {
+            id: 'msg_123',
+            type: 'message',
+            role: 'assistant',
+            content: [],
+            model: 'claude-opus-4-1',
+            usage: {
+              input_tokens: 100,
+              output_tokens: 0,
+              cache_creation_input_tokens: 40,
+              cache_read_input_tokens: 25,
+            },
+          },
+        }
+        throw Object.assign(new Error('stream failed'), {
+          code: 'stream_failed',
+        })
+      },
+    }
+    const lifecycle: Array<UsageLifecycleEvent> = []
+    const chunks = await collectMockStream(
+      mockStream,
+      createUsageLifecycleMiddleware(lifecycle),
+    )
+
+    expect(lifecycle).toEqual(['RUN_ERROR'])
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'RUN_ERROR',
+      code: 'stream_failed',
+      usage: {
+        promptTokens: 165,
+        completionTokens: 0,
+        totalTokens: 165,
+        promptTokensDetails: {
+          cacheWriteTokens: 40,
+          cachedTokens: 25,
+        },
+      },
     })
   })
 
