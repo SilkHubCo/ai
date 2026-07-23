@@ -76,4 +76,30 @@ test.describe('anthropic — code_execution skills wire format', () => {
       version: 'latest',
     })
   })
+
+  test('split GCP Agent Platform stream usage reaches RUN_FINISHED', async ({
+    request,
+  }) => {
+    const res = await request.post('/api/anthropic-skills-wire')
+    expect(res.ok()).toBe(true)
+    const { ok, error, usage } = (await res.json()) as {
+      ok: boolean
+      error?: string
+      usage?: unknown
+    }
+
+    if (!ok) {
+      throw new Error(`Route failed: ${error}`)
+    }
+
+    expect(usage).toEqual({
+      promptTokens: 5,
+      completionTokens: 2,
+      totalTokens: 7,
+      promptTokensDetails: {
+        cacheWriteTokens: 3,
+        cachedTokens: 2,
+      },
+    })
+  })
 })
