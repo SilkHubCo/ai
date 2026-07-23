@@ -67,6 +67,9 @@ import type {
 import type { AnthropicClientConfig } from '../utils/client'
 
 type AnthropicStreamUsage = Anthropic_SDK.Beta.BetaMessageDeltaUsage
+type UsageBearingRunError = Extract<StreamChunk, { type: 'RUN_ERROR' }> & {
+  usage?: Extract<StreamChunk, { type: 'RUN_FINISHED' }>['usage']
+}
 
 function mergeAnthropicStreamUsage(
   current:
@@ -84,6 +87,16 @@ function mergeAnthropicStreamUsage(
     output_tokens: next.output_tokens,
     server_tool_use: next.server_tool_use ?? current.server_tool_use,
   }
+}
+
+function attachAnthropicUsage(
+  chunk: Extract<StreamChunk, { type: 'RUN_ERROR' }>,
+  usage: AnthropicStreamUsage | undefined,
+): UsageBearingRunError {
+  const normalizedUsage = buildAnthropicUsage(usage)
+  if (!normalizedUsage) return chunk
+
+  return { ...chunk, usage: normalizedUsage }
 }
 
 /**
@@ -968,9 +981,7 @@ export class AnthropicTextAdapter<
     let hasEmittedTextMessageStart = false
     let hasEmittedRunFinished = false
     let streamUsage: AnthropicStreamUsage | undefined
-    const createRunFinishedChunk = (
-      finishReason: 'stop' | 'length' | 'tool_calls',
-    ) =>
+    const createRunFinishedChunk = (finishReason: 'stop' | 'tool_calls') =>
       ({
         type: EventType.RUN_FINISHED,
         runId,
@@ -1415,20 +1426,22 @@ export class AnthropicTextAdapter<
                     },
                   )
                 }
-                yield createRunFinishedChunk('length')
-                yield {
-                  type: EventType.RUN_ERROR,
-                  model,
-                  timestamp: Date.now(),
-                  message:
-                    'The response was cut off because the maximum token limit was reached.',
-                  code: 'max_tokens',
-                  error: {
+                yield attachAnthropicUsage(
+                  {
+                    type: EventType.RUN_ERROR,
+                    model,
+                    timestamp: Date.now(),
                     message:
                       'The response was cut off because the maximum token limit was reached.',
                     code: 'max_tokens',
+                    error: {
+                      message:
+                        'The response was cut off because the maximum token limit was reached.',
+                      code: 'max_tokens',
+                    },
                   },
-                }
+                  streamUsage,
+                )
                 break
               }
               case 'stop_sequence':
@@ -1456,22 +1469,22 @@ export class AnthropicTextAdapter<
         error,
         source: 'anthropic.processAnthropicStream',
       })
-      if (!hasEmittedRunFinished && streamUsage) {
-        yield createRunFinishedChunk('stop')
-      }
-      yield {
-        type: EventType.RUN_ERROR,
-        model,
-        timestamp: Date.now(),
-        message: err.message || 'Unknown error occurred',
-        code: err.code || String(err.status),
-        // Forward the Anthropic SDK error's `.error` response body when present.
-        ...(rawEvent !== undefined && { rawEvent }),
-        error: {
+      yield attachAnthropicUsage(
+        {
+          type: EventType.RUN_ERROR,
+          model,
+          timestamp: Date.now(),
           message: err.message || 'Unknown error occurred',
           code: err.code || String(err.status),
+          // Forward the Anthropic SDK error's `.error` response body when present.
+          ...(rawEvent !== undefined && { rawEvent }),
+          error: {
+            message: err.message || 'Unknown error occurred',
+            code: err.code || String(err.status),
+          },
         },
-      }
+        streamUsage,
+      )
     }
   }
 }
