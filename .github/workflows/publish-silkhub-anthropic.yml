@@ -1,0 +1,62 @@
+name: Publish SilkHub Anthropic adapter
+
+on:
+  push:
+    tags:
+      - 'ai-anthropic-v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish:
+    if: github.repository == 'SilkHubCo/ai'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup tools
+        uses: TanStack/config/.github/setup@190f659075ff0845850e330883eb26d7ffd0671f # main
+      - name: Configure GitHub Packages
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+          registry-url: https://npm.pkg.github.com/
+          scope: '@silkhubco'
+      - name: Verify release tag
+        run: |
+          package_version=$(node -p "require('./packages/ai-anthropic/package.json').version")
+          test "$GITHUB_REF_NAME" = "ai-anthropic-v${package_version}"
+      - name: Build dependencies
+        run: pnpm --filter '@tanstack/ai...' build
+      - name: Test package
+        run: |
+          pnpm --filter @tanstack/ai-anthropic test:lib --run
+          pnpm --filter @tanstack/ai-anthropic test:types
+          pnpm --filter @tanstack/ai-anthropic test:eslint
+          pnpm --filter @tanstack/ai-anthropic build
+          pnpm --filter @tanstack/ai-anthropic test:build
+      - name: Prepare SilkHub package identity
+        run: npm pkg set name=@silkhubco/ai-anthropic --prefix packages/ai-anthropic
+      - name: Pack release archive
+        run: |
+          package_version=$(node -p "require('./packages/ai-anthropic/package.json').version")
+          pnpm --dir packages/ai-anthropic pack --pack-destination "$RUNNER_TEMP"
+          echo "PACKAGE_ARCHIVE=$RUNNER_TEMP/silkhubco-ai-anthropic-${package_version}.tgz" >> "$GITHUB_ENV"
+      - name: Publish package
+        run: pnpm --dir packages/ai-anthropic publish --no-git-checks # zizmor: ignore[use-trusted-publishing] GitHub Packages authenticates this repository with GITHUB_TOKEN.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish release archive
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$PACKAGE_ARCHIVE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "@silkhubco/ai-anthropic $(node -p "require('./packages/ai-anthropic/package.json').version")" \
+            --notes "Backport of TanStack/ai#989 for the Pretty GCP Agent Platform integration."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
