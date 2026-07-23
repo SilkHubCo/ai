@@ -93,9 +93,9 @@ test.describe('anthropic — code_execution skills wire format', () => {
     }
 
     expect(usage).toEqual({
-      promptTokens: 5,
+      promptTokens: 10,
       completionTokens: 2,
-      totalTokens: 7,
+      totalTokens: 12,
       promptTokensDetails: {
         cacheWriteTokens: 3,
         cachedTokens: 2,

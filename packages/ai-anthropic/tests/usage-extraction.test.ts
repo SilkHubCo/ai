@@ -178,10 +178,20 @@ describe('Anthropic usage extraction', () => {
 
     const doneChunk = chunks.find((c) => c.type === 'RUN_FINISHED')
     expect(doneChunk).toBeDefined()
+    expect(doneChunk?.usage).toMatchObject({
+      promptTokens: 175,
+      completionTokens: 50,
+      totalTokens: 225,
+    })
     expect(doneChunk?.usage?.promptTokensDetails).toEqual({
       cacheWriteTokens: 50,
       cachedTokens: 25,
     })
+    expect(
+      (doneChunk?.usage?.promptTokens ?? 0) -
+        (doneChunk?.usage?.promptTokensDetails?.cacheWriteTokens ?? 0) -
+        (doneChunk?.usage?.promptTokensDetails?.cachedTokens ?? 0),
+    ).toBe(100)
   })
 
   it('attaches GCP Agent Platform usage to a max_tokens error without finishing the run', async () => {
@@ -233,9 +243,9 @@ describe('Anthropic usage extraction', () => {
     expect(chunks.at(-1)).toMatchObject({
       type: 'RUN_ERROR',
       usage: {
-        promptTokens: 100,
+        promptTokens: 165,
         completionTokens: 50,
-        totalTokens: 150,
+        totalTokens: 215,
         promptTokensDetails: {
           cacheWriteTokens: 40,
           cachedTokens: 25,
@@ -279,9 +289,9 @@ describe('Anthropic usage extraction', () => {
       type: 'RUN_ERROR',
       code: 'stream_failed',
       usage: {
-        promptTokens: 100,
+        promptTokens: 165,
         completionTokens: 0,
-        totalTokens: 100,
+        totalTokens: 165,
         promptTokensDetails: {
           cacheWriteTokens: 40,
           cachedTokens: 25,
