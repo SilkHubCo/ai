@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { chat } from '@tanstack/ai'
 import { AnthropicTextAdapter } from '../src/adapters/text'
-import type { ChatMiddleware, StreamChunk, UsageInfo } from '@tanstack/ai'
+import type { ChatMiddleware, StreamChunk } from '@tanstack/ai'
 
 const mocks = vi.hoisted(() => {
   const betaMessagesCreate = vi.fn()
@@ -66,7 +66,6 @@ type UsageLifecycleEvent = 'RUN_FINISHED' | 'onUsage' | 'RUN_ERROR'
 
 function createUsageLifecycleMiddleware(
   lifecycle: Array<UsageLifecycleEvent>,
-  usages: Array<UsageInfo>,
 ): ChatMiddleware {
   return {
     name: 'usage-lifecycle',
@@ -75,9 +74,8 @@ function createUsageLifecycleMiddleware(
         lifecycle.push(chunk.type)
       }
     },
-    onUsage(_ctx, usage) {
+    onUsage() {
       lifecycle.push('onUsage')
-      usages.push(usage)
     },
   }
 }
@@ -186,7 +184,7 @@ describe('Anthropic usage extraction', () => {
     })
   })
 
-  it('reports GCP Agent Platform usage before a max_tokens error', async () => {
+  it('attaches GCP Agent Platform usage to a max_tokens error without finishing the run', async () => {
     const mockStream = createMockStream([
       {
         type: 'message_start',
@@ -226,15 +224,15 @@ describe('Anthropic usage extraction', () => {
       },
     ])
     const lifecycle: Array<UsageLifecycleEvent> = []
-    const usages: Array<UsageInfo> = []
     const chunks = await collectMockStream(
       mockStream,
-      createUsageLifecycleMiddleware(lifecycle, usages),
+      createUsageLifecycleMiddleware(lifecycle),
     )
 
-    expect(lifecycle).toEqual(['RUN_FINISHED', 'onUsage', 'RUN_ERROR'])
-    expect(usages).toEqual([
-      expect.objectContaining({
+    expect(lifecycle).toEqual(['RUN_ERROR'])
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'RUN_ERROR',
+      usage: {
         promptTokens: 100,
         completionTokens: 50,
         totalTokens: 150,
@@ -242,12 +240,11 @@ describe('Anthropic usage extraction', () => {
           cacheWriteTokens: 40,
           cachedTokens: 25,
         },
-      }),
-    ])
-    expect(chunks.at(-1)?.type).toBe('RUN_ERROR')
+      },
+    })
   })
 
-  it('reports known GCP Agent Platform usage before a stream error', async () => {
+  it('attaches known GCP Agent Platform usage to a stream error without finishing the run', async () => {
     const mockStream: AsyncIterable<Record<string, unknown>> = {
       async *[Symbol.asyncIterator]() {
         yield {
@@ -272,15 +269,16 @@ describe('Anthropic usage extraction', () => {
       },
     }
     const lifecycle: Array<UsageLifecycleEvent> = []
-    const usages: Array<UsageInfo> = []
     const chunks = await collectMockStream(
       mockStream,
-      createUsageLifecycleMiddleware(lifecycle, usages),
+      createUsageLifecycleMiddleware(lifecycle),
     )
 
-    expect(lifecycle).toEqual(['RUN_FINISHED', 'onUsage', 'RUN_ERROR'])
-    expect(usages).toEqual([
-      expect.objectContaining({
+    expect(lifecycle).toEqual(['RUN_ERROR'])
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'RUN_ERROR',
+      code: 'stream_failed',
+      usage: {
         promptTokens: 100,
         completionTokens: 0,
         totalTokens: 100,
@@ -288,11 +286,7 @@ describe('Anthropic usage extraction', () => {
           cacheWriteTokens: 40,
           cachedTokens: 25,
         },
-      }),
-    ])
-    expect(chunks.at(-1)).toMatchObject({
-      type: 'RUN_ERROR',
-      code: 'stream_failed',
+      },
     })
   })
 
