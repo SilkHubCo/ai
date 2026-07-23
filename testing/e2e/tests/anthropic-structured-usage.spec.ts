@@ -35,10 +35,14 @@ test.describe('anthropic — structured-output fallback usage (#758)', () => {
     expect(error ?? null).toBeNull()
     expect(ok).toBe(true)
     expect(usage).toMatchObject({
-      promptTokens: 125,
+      promptTokens: 5885,
       completionTokens: 1346,
-      totalTokens: 1471,
+      totalTokens: 7231,
       promptTokensDetails: { cachedTokens: 5760 },
     })
+    expect(
+      (usage?.promptTokens ?? 0) -
+        (usage?.promptTokensDetails?.cachedTokens ?? 0),
+    ).toBe(125)
   })
 })
