@@ -33,6 +33,7 @@ jobs:
         run: pnpm run test:pr
   preview:
     name: Preview
+    if: github.repository == 'TanStack/ai'
     runs-on: ubuntu-latest
     permissions:
       contents: read
