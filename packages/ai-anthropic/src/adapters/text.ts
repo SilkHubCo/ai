@@ -59,6 +59,7 @@ import type {
   AnthropicTextMetadata,
 } from '../message-types'
 import type { AnthropicClientConfig } from '../utils'
+import type { AnthropicMessagesClient } from '../utils/client'
 
 /**
  * The block type carried by an Anthropic provider-executed (server) tool's
@@ -196,6 +197,10 @@ export function computeAnthropicBetas(
  */
 export interface AnthropicTextConfig extends AnthropicClientConfig {}
 
+export type AnthropicTextAdapterConfig =
+  | AnthropicTextConfig
+  | { client: AnthropicMessagesClient }
+
 /**
  * Anthropic-specific provider options for text/chat
  */
@@ -227,6 +232,24 @@ type ResolveToolCapabilities<TModel extends string> =
   TModel extends keyof AnthropicChatModelToolCapabilitiesByName
     ? NonNullable<AnthropicChatModelToolCapabilitiesByName[TModel]>
     : readonly []
+
+type SdkAnthropicMessagesClient = {
+  beta: {
+    messages: Pick<Anthropic_SDK['beta']['messages'], 'create'>
+  }
+}
+
+/**
+ * Restore the package SDK's precise overloads at the adapter boundary.
+ * Alternative clients may use a separate Anthropic 0.x SDK whose declarations
+ * drift while implementing the same Messages protocol at runtime.
+ */
+function asSdkAnthropicMessagesClient(
+  client: AnthropicMessagesClient,
+): SdkAnthropicMessagesClient {
+  // eslint-disable-next-line no-restricted-syntax -- The public callable deliberately erases version-specific SDK overloads; restore this package's SDK type at the internal boundary.
+  return client as unknown as SdkAnthropicMessagesClient
+}
 
 // ===========================
 // Adapter Implementation
@@ -260,11 +283,14 @@ export class AnthropicTextAdapter<
   override readonly kind = 'text' as const
   readonly name = 'anthropic' as const
 
-  private readonly client: Anthropic_SDK
+  private readonly client: SdkAnthropicMessagesClient
 
-  constructor(config: AnthropicTextConfig, model: TModel) {
+  constructor(config: AnthropicTextAdapterConfig, model: TModel) {
     super({}, model)
-    this.client = createAnthropicClient(config)
+    this.client =
+      'client' in config
+        ? asSdkAnthropicMessagesClient(config.client)
+        : createAnthropicClient(config)
   }
 
   async *chatStream(
@@ -1427,6 +1453,23 @@ export function createAnthropicChat<
   ResolveInputModalities<TModel>
 > {
   return new AnthropicTextAdapter({ apiKey, ...config }, model)
+}
+
+/**
+ * Creates an Anthropic chat adapter with an injected Messages client.
+ * Type resolution happens here at the call site.
+ */
+export function createAnthropicChatWithClient<
+  TModel extends (typeof ANTHROPIC_MODELS)[number],
+>(
+  model: TModel,
+  client: AnthropicMessagesClient,
+): AnthropicTextAdapter<
+  TModel,
+  ResolveProviderOptions<TModel>,
+  ResolveInputModalities<TModel>
+> {
+  return new AnthropicTextAdapter({ client }, model)
 }
 
 /**
