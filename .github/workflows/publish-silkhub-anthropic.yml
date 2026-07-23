@@ -49,7 +49,7 @@ jobs:
           pnpm --dir packages/ai-anthropic pack --pack-destination "$RUNNER_TEMP"
           echo "PACKAGE_ARCHIVE=$RUNNER_TEMP/silkhubco-ai-anthropic-${package_version}.tgz" >> "$GITHUB_ENV"
       - name: Publish package
-        run: pnpm --dir packages/ai-anthropic publish --no-git-checks
+        run: pnpm --dir packages/ai-anthropic publish --no-git-checks # zizmor: ignore[use-trusted-publishing] GitHub Packages authenticates this repository with GITHUB_TOKEN.
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish release archive
