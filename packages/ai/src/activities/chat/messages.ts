@@ -76,6 +76,17 @@ function getTextContent(content: string | null | Array<ContentPart>): string {
 }
 
 /**
+ * Preserve only genuinely multimodal tool results; text-only arrays retain the legacy string shape.
+ */
+function toolResultContent(
+  content: ModelMessage['content'],
+): string | Array<ContentPart> {
+  return Array.isArray(content) && content.some((part) => part.type !== 'text')
+    ? content
+    : getTextContent(content)
+}
+
+/**
  * Convert UIMessages or ModelMessages to ModelMessages
  */
 export function convertMessagesToModelMessages(
@@ -423,12 +434,7 @@ export function modelMessageToUIMessage(
     parts.push({
       type: 'tool-result',
       toolCallId: modelMessage.toolCallId,
-      // Preserve only genuinely multimodal tool results; text-only arrays retain the legacy string shape.
-      content:
-        Array.isArray(modelMessage.content) &&
-        modelMessage.content.some((part) => part.type !== 'text')
-          ? modelMessage.content
-          : getTextContent(modelMessage.content),
+      content: toolResultContent(modelMessage.content),
       state: 'complete',
     })
   } else if (Array.isArray(modelMessage.content)) {
@@ -601,12 +607,7 @@ export function modelMessagesToUIMessages(
         currentAssistantMessage &&
         currentAssistantMessage.role === 'assistant'
       ) {
-        // Preserve only genuinely multimodal tool results; text-only arrays retain the legacy string shape.
-        const content =
-          Array.isArray(msg.content) &&
-          msg.content.some((part) => part.type !== 'text')
-            ? msg.content
-            : getTextContent(msg.content)
+        const content = toolResultContent(msg.content)
         const toolCallPart = currentAssistantMessage.parts.find(
           (part): part is ToolCallPart =>
             part.type === 'tool-call' && part.id === msg.toolCallId,
