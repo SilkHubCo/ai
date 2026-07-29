@@ -88,8 +88,6 @@ function mergeAnthropicStreamUsage(
     input_tokens: next.input_tokens ?? current.input_tokens,
     iterations: next.iterations ?? current.iterations,
     output_tokens: next.output_tokens,
-    output_tokens_details:
-      next.output_tokens_details ?? current.output_tokens_details,
     server_tool_use: next.server_tool_use ?? current.server_tool_use,
   }
 }

@@ -23,6 +23,7 @@ it('routes an injected Vertex client request to the Vertex model endpoint', asyn
     NonNullable<ConstructorParameters<typeof AnthropicVertex>[0]>['authClient']
   >
   const client = new AnthropicVertex({
+    baseURL: 'https://aiplatform.eu.rep.googleapis.com/v1',
     region: 'eu',
     projectId: 'test-project',
     authClient,
