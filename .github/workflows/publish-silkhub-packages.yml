@@ -1,0 +1,94 @@
+name: Publish SilkHub packages
+
+on:
+  push:
+    tags:
+      - 'ai-v*'
+      - 'ai-anthropic-v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish:
+    if: github.repository == 'SilkHubCo/ai'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup tools
+        uses: TanStack/config/.github/setup@190f659075ff0845850e330883eb26d7ffd0671f # main
+      - name: Configure GitHub Packages
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+          registry-url: https://npm.pkg.github.com/
+          scope: '@silkhubco'
+      - name: Select package
+        run: |
+          case "$GITHUB_REF_NAME" in
+            ai-v*)
+              {
+                echo "PACKAGE_NAME=@tanstack/ai"
+                echo "PACKAGE_DIR=packages/ai"
+                echo "PACKAGE_SLUG=ai"
+                echo "TAG_PREFIX=ai-v"
+                echo "RELEASE_TITLE=@silkhubco/ai"
+              } >> "$GITHUB_ENV"
+              ;;
+            ai-anthropic-v*)
+              {
+                echo "PACKAGE_NAME=@tanstack/ai-anthropic"
+                echo "PACKAGE_DIR=packages/ai-anthropic"
+                echo "PACKAGE_SLUG=ai-anthropic"
+                echo "TAG_PREFIX=ai-anthropic-v"
+                echo "RELEASE_TITLE=@silkhubco/ai-anthropic"
+              } >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo "Unsupported release tag: $GITHUB_REF_NAME" >&2
+              exit 1
+              ;;
+          esac
+      - name: Verify release tag
+        run: |
+          package_version=$(node -p "require('./$PACKAGE_DIR/package.json').version")
+          expected_tag="^${TAG_PREFIX}${package_version//./\\.}-silkhubco\\.[0-9]+$"
+          [[ "$GITHUB_REF_NAME" =~ $expected_tag ]]
+          {
+            echo "PACKAGE_VERSION=$package_version"
+            echo "RELEASE_NOTES=Release $RELEASE_TITLE $package_version from tag https://github.com/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME (commit https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)."
+          } >> "$GITHUB_ENV"
+      - name: Build dependencies
+        run: pnpm --filter "$PACKAGE_NAME..." build
+      - name: Test package
+        run: |
+          pnpm --filter "$PACKAGE_NAME" test:lib --run
+          pnpm --filter "$PACKAGE_NAME" test:types
+          pnpm --filter "$PACKAGE_NAME" test:oxlint
+          pnpm --filter "$PACKAGE_NAME" build
+          pnpm --filter "$PACKAGE_NAME" test:build
+      - name: Prepare SilkHub package identity
+        run: npm pkg set "name=$RELEASE_TITLE" --prefix "$PACKAGE_DIR"
+      - name: Pack release archive
+        run: |
+          package_version=$(node -p "require('./$PACKAGE_DIR/package.json').version")
+          pnpm --dir "$PACKAGE_DIR" pack --pack-destination "$RUNNER_TEMP"
+          echo "PACKAGE_ARCHIVE=$RUNNER_TEMP/silkhubco-$PACKAGE_SLUG-$package_version.tgz" >> "$GITHUB_ENV"
+      - name: Publish package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm --dir "$PACKAGE_DIR" publish --no-git-checks # zizmor: ignore[use-trusted-publishing] GitHub Packages authenticates this repository with GITHUB_TOKEN.
+      - name: Publish release archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$PACKAGE_ARCHIVE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$RELEASE_TITLE $PACKAGE_VERSION" \
+            --notes "$RELEASE_NOTES"
