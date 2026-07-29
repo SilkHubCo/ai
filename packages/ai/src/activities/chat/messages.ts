@@ -419,10 +419,15 @@ export function modelMessageToUIMessage(
   // Handle tool results (when role is "tool") - only produce tool-result part,
   // not a text part (the content IS the tool result, not display text)
   if (modelMessage.role === 'tool' && modelMessage.toolCallId) {
+    // Preserve arrays only for multimodal results; text-only arrays keep their legacy string shape.
     parts.push({
       type: 'tool-result',
       toolCallId: modelMessage.toolCallId,
-      content: getTextContent(modelMessage.content),
+      content:
+        Array.isArray(modelMessage.content) &&
+        modelMessage.content.some((part) => part.type !== 'text')
+          ? modelMessage.content
+          : getTextContent(modelMessage.content),
       state: 'complete',
     })
   } else if (Array.isArray(modelMessage.content)) {
@@ -586,14 +591,20 @@ export function modelMessagesToUIMessages(
         currentAssistantMessage &&
         currentAssistantMessage.role === 'assistant'
       ) {
-        const content = getTextContent(msg.content)
+        const content =
+          Array.isArray(msg.content) &&
+          msg.content.some((part) => part.type !== 'text')
+            ? msg.content
+            : getTextContent(msg.content)
         const toolCallPart = currentAssistantMessage.parts.find(
           (part): part is ToolCallPart =>
             part.type === 'tool-call' && part.id === msg.toolCallId,
         )
 
         if (toolCallPart) {
-          toolCallPart.output = parseToolResultContent(content)
+          toolCallPart.output = Array.isArray(content)
+            ? content
+            : parseToolResultContent(content)
           toolCallPart.state = 'complete'
         }
 

@@ -1,0 +1,62 @@
+name: Publish SilkHub core package
+
+on:
+  push:
+    tags:
+      - 'ai-v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish:
+    if: github.repository == 'SilkHubCo/ai'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup tools
+        uses: TanStack/config/.github/setup@190f659075ff0845850e330883eb26d7ffd0671f # main
+      - name: Configure GitHub Packages
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+          registry-url: https://npm.pkg.github.com/
+          scope: '@silkhubco'
+      - name: Verify release tag
+        run: |
+          package_version=$(node -p "require('./packages/ai/package.json').version")
+          [[ "$GITHUB_REF_NAME" =~ ^ai-v${package_version//./\\.}-silkhubco\.[0-9]+$ ]]
+      - name: Build dependencies
+        run: pnpm --filter '@tanstack/ai...' build
+      - name: Test package
+        run: |
+          pnpm --filter @tanstack/ai test:lib --run
+          pnpm --filter @tanstack/ai test:types
+          pnpm --filter @tanstack/ai test:eslint
+          pnpm --filter @tanstack/ai build
+          pnpm --filter @tanstack/ai test:build
+      - name: Prepare SilkHub package identity
+        run: npm pkg set name=@silkhubco/ai --prefix packages/ai
+      - name: Pack release archive
+        run: |
+          package_version=$(node -p "require('./packages/ai/package.json').version")
+          pnpm --dir packages/ai pack --pack-destination "$RUNNER_TEMP"
+          echo "PACKAGE_ARCHIVE=$RUNNER_TEMP/silkhubco-ai-${package_version}.tgz" >> "$GITHUB_ENV"
+      - name: Publish package
+        run: pnpm --dir packages/ai publish --no-git-checks # zizmor: ignore[use-trusted-publishing] GitHub Packages authenticates this repository with GITHUB_TOKEN.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish release archive
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$PACKAGE_ARCHIVE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "@silkhubco/ai $(node -p "require('./packages/ai/package.json').version")" \
+            --notes "Preserve multimodal server-tool results through model-to-UI message conversion for the Pretty GCP Agent Platform integration."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
