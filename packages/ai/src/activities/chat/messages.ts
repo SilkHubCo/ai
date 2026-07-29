@@ -422,7 +422,9 @@ export function modelMessageToUIMessage(
     parts.push({
       type: 'tool-result',
       toolCallId: modelMessage.toolCallId,
-      content: getTextContent(modelMessage.content),
+      content: Array.isArray(modelMessage.content)
+        ? modelMessage.content
+        : getTextContent(modelMessage.content),
       state: 'complete',
     })
   } else if (Array.isArray(modelMessage.content)) {
@@ -586,14 +588,18 @@ export function modelMessagesToUIMessages(
         currentAssistantMessage &&
         currentAssistantMessage.role === 'assistant'
       ) {
-        const content = getTextContent(msg.content)
+        const content = Array.isArray(msg.content)
+          ? msg.content
+          : getTextContent(msg.content)
         const toolCallPart = currentAssistantMessage.parts.find(
           (part): part is ToolCallPart =>
             part.type === 'tool-call' && part.id === msg.toolCallId,
         )
 
         if (toolCallPart) {
-          toolCallPart.output = parseToolResultContent(content)
+          toolCallPart.output = Array.isArray(content)
+            ? content
+            : parseToolResultContent(content)
           toolCallPart.state = 'complete'
         }
 
