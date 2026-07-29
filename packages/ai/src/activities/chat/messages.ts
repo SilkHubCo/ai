@@ -423,7 +423,12 @@ export function modelMessageToUIMessage(
     parts.push({
       type: 'tool-result',
       toolCallId: modelMessage.toolCallId,
-      content: getTextContent(modelMessage.content),
+      // Preserve only genuinely multimodal tool results; text-only arrays retain the legacy string shape.
+      content:
+        Array.isArray(modelMessage.content) &&
+        modelMessage.content.some((part) => part.type !== 'text')
+          ? modelMessage.content
+          : getTextContent(modelMessage.content),
       state: 'complete',
     })
   } else if (Array.isArray(modelMessage.content)) {
@@ -596,14 +601,21 @@ export function modelMessagesToUIMessages(
         currentAssistantMessage &&
         currentAssistantMessage.role === 'assistant'
       ) {
-        const content = getTextContent(msg.content)
+        // Preserve only genuinely multimodal tool results; text-only arrays retain the legacy string shape.
+        const content =
+          Array.isArray(msg.content) &&
+          msg.content.some((part) => part.type !== 'text')
+            ? msg.content
+            : getTextContent(msg.content)
         const toolCallPart = currentAssistantMessage.parts.find(
           (part): part is ToolCallPart =>
             part.type === 'tool-call' && part.id === msg.toolCallId,
         )
 
         if (toolCallPart) {
-          toolCallPart.output = parseToolResultContent(content)
+          toolCallPart.output = Array.isArray(content)
+            ? content
+            : parseToolResultContent(content)
           toolCallPart.state = 'complete'
         }
 
