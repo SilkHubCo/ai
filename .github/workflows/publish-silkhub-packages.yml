@@ -39,7 +39,6 @@ jobs:
                 echo "PACKAGE_SLUG=ai"
                 echo "TAG_PREFIX=ai-v"
                 echo "RELEASE_TITLE=@silkhubco/ai"
-                echo "RELEASE_NOTES=Preserve multimodal server-tool results through model-to-UI message conversion."
               } >> "$GITHUB_ENV"
               ;;
             ai-anthropic-v*)
@@ -49,7 +48,6 @@ jobs:
                 echo "PACKAGE_SLUG=ai-anthropic"
                 echo "TAG_PREFIX=ai-anthropic-v"
                 echo "RELEASE_TITLE=@silkhubco/ai-anthropic"
-                echo "RELEASE_NOTES=Add injected Anthropic Messages clients, including Vertex clients."
               } >> "$GITHUB_ENV"
               ;;
             *)
@@ -62,6 +60,10 @@ jobs:
           package_version=$(node -p "require('./$PACKAGE_DIR/package.json').version")
           expected_tag="^${TAG_PREFIX}${package_version//./\\.}-silkhubco\\.[0-9]+$"
           [[ "$GITHUB_REF_NAME" =~ $expected_tag ]]
+          {
+            echo "PACKAGE_VERSION=$package_version"
+            echo "RELEASE_NOTES=Release $RELEASE_TITLE $package_version from tag https://github.com/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME (commit https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)."
+          } >> "$GITHUB_ENV"
       - name: Build dependencies
         run: pnpm --filter "$PACKAGE_NAME..." build
       - name: Test package
@@ -88,5 +90,5 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" "$PACKAGE_ARCHIVE" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "$RELEASE_TITLE $(node -p "require('./$PACKAGE_DIR/package.json').version")" \
+            --title "$RELEASE_TITLE $PACKAGE_VERSION" \
             --notes "$RELEASE_NOTES"
