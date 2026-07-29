@@ -580,6 +580,23 @@ describe('Message Converters', () => {
       })
     })
 
+    it('should preserve legacy string output for text-only standalone tool content parts', () => {
+      const modelMessage: ModelMessage = {
+        role: 'tool',
+        content: [{ type: 'text', content: '{"result": "success"}' }],
+        toolCallId: 'tool-1',
+      }
+
+      const result = modelMessageToUIMessage(modelMessage)
+
+      expect(result.parts).toContainEqual({
+        type: 'tool-result',
+        toolCallId: 'tool-1',
+        content: '{"result": "success"}',
+        state: 'complete',
+      })
+    })
+
     it('should convert assistant message with toolCalls and text', () => {
       const modelMessage: ModelMessage = {
         role: 'assistant',
@@ -955,6 +972,44 @@ describe('Message Converters', () => {
           state: 'complete',
         },
       ])
+    })
+
+    it('should preserve legacy text output for text-only tool content parts', () => {
+      const modelMessages: Array<ModelMessage> = [
+        {
+          role: 'assistant',
+          content: 'Let me check.',
+          toolCalls: [
+            {
+              id: 'tc-1',
+              type: 'function',
+              function: { name: 'getWeather', arguments: '{}' },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [{ type: 'text', content: '{"temp": 72}' }],
+          toolCallId: 'tc-1',
+        },
+      ]
+
+      const result = modelMessagesToUIMessages(modelMessages)
+
+      expect(result[0]?.parts).toContainEqual({
+        type: 'tool-call',
+        id: 'tc-1',
+        name: 'getWeather',
+        arguments: '{}',
+        state: 'complete',
+        output: { temp: 72 },
+      })
+      expect(result[0]?.parts).toContainEqual({
+        type: 'tool-result',
+        toolCallId: 'tc-1',
+        content: '{"temp": 72}',
+        state: 'complete',
+      })
     })
 
     it('should preserve multimodal content in a merged tool result', () => {
