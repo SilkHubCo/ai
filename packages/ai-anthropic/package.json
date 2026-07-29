@@ -66,6 +66,7 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@anthropic-ai/vertex-sdk": "^0.15.0",
     "@tanstack/ai": "workspace:*",
     "@vitest/coverage-v8": "4.0.14",
     "zod": "^4.2.0"
