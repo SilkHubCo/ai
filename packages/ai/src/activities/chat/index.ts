@@ -431,6 +431,11 @@ export interface TextActivityOptions<
   /** Application state mirrored in a STATE_SNAPSHOT before an interrupt terminal. */
   state?: TextOptions['state']
   /**
+   * Consumers that own message identity can disable the interrupt snapshot;
+   * it is emitted by default for existing consumers.
+   */
+  emitMessagesSnapshot?: TextOptions['emitMessagesSnapshot']
+  /**
    * AG-UI interrupt resume responses. Persistence middleware validates these
    * before accepting new input on a thread with pending interrupts.
    */
@@ -2287,7 +2292,9 @@ class TextEngine<
       return false
     }
 
-    yield* this.pipeThroughMiddleware(this.buildMessagesSnapshotChunk())
+    if (this.params.emitMessagesSnapshot !== false) {
+      yield* this.pipeThroughMiddleware(this.buildMessagesSnapshotChunk())
+    }
     if (this.params.state !== undefined) {
       yield* this.pipeThroughMiddleware({
         type: EventType.STATE_SNAPSHOT,

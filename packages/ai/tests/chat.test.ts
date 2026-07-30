@@ -637,6 +637,40 @@ describe('chat()', () => {
       })
     })
 
+    it('omits the message snapshot when the consumer owns message identity', async () => {
+      const sequence: Array<string> = []
+      const { adapter } = createMockAdapter({
+        iterations: [
+          [
+            ev.runStarted(),
+            ev.toolStart('call_1', 'clientSearch'),
+            ev.toolArgs('call_1', '{"query":"test"}'),
+            ev.runFinished('tool_calls'),
+          ],
+        ],
+      })
+
+      const chunks = await collectChunks(
+        chat({
+          adapter,
+          messages: [{ role: 'user', content: 'Search' }],
+          tools: [clientTool('clientSearch')],
+          state: { screen: 'search' },
+          emitMessagesSnapshot: false,
+          middleware: [interruptSnapshotMiddleware(sequence)],
+        }) as AsyncIterable<StreamChunk>,
+      )
+
+      expect(sequence).toEqual(['state'])
+      expect(chunks.slice(-2).map((value) => value.type)).toEqual([
+        EventType.STATE_SNAPSHOT,
+        EventType.RUN_FINISHED,
+      ])
+      expect(
+        chunks.some((value) => value.type === EventType.MESSAGES_SNAPSHOT),
+      ).toBe(false)
+    })
+
     it('should yield an interrupt outcome for client tools', async () => {
       const { adapter } = createMockAdapter({
         iterations: [

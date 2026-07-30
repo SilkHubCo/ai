@@ -1026,6 +1026,12 @@ export interface TextOptions<
   state?: unknown
 
   /**
+   * Keep the full message snapshot in the interrupt boundary for consumers
+   * that do not maintain their own message identity.
+   */
+  emitMessagesSnapshot?: boolean
+
+  /**
    * AG-UI interrupt resume responses supplied by the client on a follow-up run.
    * Threaded through request parsing now so later runtime behavior can resolve
    * upstream-native interrupts.
