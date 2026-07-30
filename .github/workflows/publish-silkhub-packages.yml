@@ -83,7 +83,16 @@ jobs:
       - name: Publish package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: pnpm --dir "$PACKAGE_DIR" publish --no-git-checks # zizmor: ignore[use-trusted-publishing] GitHub Packages authenticates this repository with GITHUB_TOKEN.
+        run: |
+          set -o pipefail
+          if pnpm --dir "$PACKAGE_DIR" publish --no-git-checks 2>&1 | tee "$RUNNER_TEMP/publish.log"; then # zizmor: ignore[use-trusted-publishing] GitHub Packages authenticates this repository with GITHUB_TOKEN.
+            exit 0
+          fi
+          if grep -Fq 'Cannot publish over existing version' "$RUNNER_TEMP/publish.log"; then
+            echo "Package version $PACKAGE_VERSION already exists; keeping the new release archive."
+            exit 0
+          fi
+          exit 1
       - name: Publish release archive
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
