@@ -4813,9 +4813,7 @@ describe('StreamProcessor', () => {
           (p) => p.type === 'tool-call' && p.id === 'tc-1',
         ),
       ).toBe(true)
-      expect(assistants[0]!.parts.some((p) => p.type === 'thinking')).toBe(
-        true,
-      )
+      expect(assistants[0]!.parts.some((p) => p.type === 'thinking')).toBe(true)
     })
 
     it('reasoning-then-text adopts the server messageId', () => {
