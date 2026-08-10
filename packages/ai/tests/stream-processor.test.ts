@@ -4781,4 +4781,80 @@ describe('StreamProcessor', () => {
       expect((textPart as { content: string }).content).toBe('resumed')
     })
   })
+
+  describe('server message id adoption', () => {
+    const reasoning = (delta: string) =>
+      chunk(EventType.REASONING_MESSAGE_CONTENT, { messageId: 'r-1', delta })
+
+    it('reasoning-then-tool-call adopts the server parentMessageId', () => {
+      const processor = new StreamProcessor()
+
+      processor.processChunk(ev.runStarted())
+      processor.processChunk(reasoning('Thinking...'))
+      processor.processChunk(
+        chunk(EventType.TOOL_CALL_START, {
+          toolCallId: 'tc-1',
+          toolCallName: 'search',
+          toolName: 'search',
+          parentMessageId: 'server-msg-1',
+        }),
+      )
+      processor.processChunk(ev.toolArgs('tc-1', '{"q":"x"}'))
+      processor.processChunk(ev.toolEnd('tc-1', 'search'))
+      processor.processChunk(ev.runFinished('tool_calls'))
+
+      const assistants = processor
+        .getMessages()
+        .filter((m) => m.role === 'assistant')
+      expect(assistants).toHaveLength(1)
+      expect(assistants[0]!.id).toBe('server-msg-1')
+      expect(
+        assistants[0]!.parts.some(
+          (p) => p.type === 'tool-call' && p.id === 'tc-1',
+        ),
+      ).toBe(true)
+      expect(assistants[0]!.parts.some((p) => p.type === 'thinking')).toBe(
+        true,
+      )
+    })
+
+    it('reasoning-then-text adopts the server messageId', () => {
+      const processor = new StreamProcessor()
+
+      processor.processChunk(ev.runStarted())
+      processor.processChunk(reasoning('Thinking...'))
+      processor.processChunk(ev.textStart('server-msg-1'))
+      processor.processChunk(ev.textContent('Answer', 'server-msg-1'))
+      processor.processChunk(ev.textEnd('server-msg-1'))
+      processor.processChunk(ev.runFinished())
+
+      const assistants = processor
+        .getMessages()
+        .filter((m) => m.role === 'assistant')
+      expect(assistants).toHaveLength(1)
+      expect(assistants[0]!.id).toBe('server-msg-1')
+    })
+
+    it('a turn with no server id keeps the client id', () => {
+      const processor = new StreamProcessor()
+
+      processor.processChunk(ev.runStarted())
+      processor.processChunk(reasoning('Thinking...'))
+      processor.processChunk(ev.toolStart('tc-1', 'search'))
+      processor.processChunk(ev.toolArgs('tc-1', '{"q":"x"}'))
+      processor.processChunk(ev.toolEnd('tc-1', 'search'))
+      processor.processChunk(ev.runFinished('tool_calls'))
+
+      const assistants = processor
+        .getMessages()
+        .filter((m) => m.role === 'assistant')
+      expect(assistants).toHaveLength(1)
+      expect(assistants[0]!.id).toMatch(/^msg-/)
+      expect(
+        assistants[0]!.parts.some(
+          (p) => p.type === 'tool-call' && p.id === 'tc-1',
+        ),
+      ).toBe(true)
+    })
+  })
 })

@@ -762,6 +762,29 @@ export class StreamProcessor {
     return { messageId: id, state }
   }
 
+  /**
+   * The server's message id is authoritative for a turn: a client-minted
+   * message (parked in pendingManualMessageId) is renamed to the server's id
+   * the moment any event carries one.
+   */
+  private adoptServerMessageId(from: string, to: string): void {
+    if (from === to) return
+
+    this.messages = this.messages.map((msg) =>
+      msg.id === from ? { ...msg, id: to } : msg,
+    )
+
+    const state = this.messageStates.get(from)
+    if (state) {
+      state.id = to
+      this.messageStates.delete(from)
+      this.messageStates.set(to, state)
+    }
+
+    this.activeMessageIds.delete(from)
+    this.activeMessageIds.add(to)
+  }
+
   // ============================================
   // Event Handlers
   // ============================================
@@ -785,24 +808,7 @@ export class StreamProcessor {
       const pendingId = this.pendingManualMessageId
       this.pendingManualMessageId = null
 
-      if (pendingId !== messageId) {
-        // Update the message's ID in the messages array
-        this.messages = this.messages.map((msg) =>
-          msg.id === pendingId ? { ...msg, id: messageId } : msg,
-        )
-
-        // Move state to the new key
-        const existingState = this.messageStates.get(pendingId)
-        if (existingState) {
-          existingState.id = messageId
-          this.messageStates.delete(pendingId)
-          this.messageStates.set(messageId, existingState)
-        }
-
-        // Update activeMessageIds
-        this.activeMessageIds.delete(pendingId)
-        this.activeMessageIds.add(messageId)
-      }
+      this.adoptServerMessageId(pendingId, messageId)
 
       // Ensure state exists
       if (!this.messageStates.has(messageId)) {
@@ -1231,6 +1237,14 @@ export class StreamProcessor {
   private handleToolCallStartEvent(
     chunk: Extract<StreamChunk, { type: 'TOOL_CALL_START' }>,
   ): void {
+    if (chunk.parentMessageId && this.pendingManualMessageId) {
+      this.adoptServerMessageId(
+        this.pendingManualMessageId,
+        chunk.parentMessageId,
+      )
+      this.pendingManualMessageId = null
+    }
+
     // Determine the message this tool call belongs to
     const targetMessageId =
       chunk.parentMessageId ?? this.getActiveAssistantMessageId()
