@@ -762,11 +762,7 @@ export class StreamProcessor {
     return { messageId: id, state }
   }
 
-  /**
-   * The server's message id is authoritative for a turn: a client-minted
-   * message (parked in pendingManualMessageId) is renamed to the server's id
-   * the moment any event carries one.
-   */
+  /** Rename a client-minted pending message to the server's authoritative id. */
   private adoptServerMessageId(from: string, to: string): void {
     if (from === to) return
 
@@ -783,18 +779,6 @@ export class StreamProcessor {
 
     this.activeMessageIds.delete(from)
     this.activeMessageIds.add(to)
-
-    for (const [toolCallId, msgId] of this.toolCallToMessage) {
-      if (msgId === from) this.toolCallToMessage.set(toolCallId, to)
-    }
-    if (this.structuredMessageIds.delete(from)) {
-      this.structuredMessageIds.add(to)
-    }
-    const batch = this.structuredOutputUpdateBatches.get(from)
-    if (batch) {
-      this.structuredOutputUpdateBatches.delete(from)
-      this.structuredOutputUpdateBatches.set(to, batch)
-    }
   }
 
   // ============================================
