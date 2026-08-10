@@ -81,3 +81,23 @@ export function restoreToolResultContent(
     .map((part) => (part.type === 'text' ? part.content : ''))
     .join('')
 }
+
+/**
+ * Split a wire tool result into the two shapes the processor writes: `content`
+ * for the tool-result part (multimodal restored) and `output` for the
+ * tool-call part (JSON parsed when the content is a plain string).
+ */
+export function parseToolResultWire(wireResult: string | Array<ContentPart>): {
+  content: string | Array<ContentPart>
+  output: unknown
+} {
+  const content = Array.isArray(wireResult)
+    ? wireResult
+    : restoreToolResultContent(wireResult)
+  if (typeof content !== 'string') return { content, output: content }
+  try {
+    return { content, output: JSON.parse(content) }
+  } catch {
+    return { content, output: content }
+  }
+}

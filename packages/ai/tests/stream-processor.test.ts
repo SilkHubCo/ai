@@ -4315,8 +4315,30 @@ describe('StreamProcessor', () => {
       expect(toolResultPart.state).toBe('complete')
     })
 
-    it('restores a JSON-stringified multimodal ContentPart array from the wire', () => {
+    const resultParts = (wireContent: string) => {
       const processor = new StreamProcessor()
+      processor.processChunk(ev.runStarted())
+      processor.processChunk(ev.textStart())
+      processor.processChunk(ev.toolStart('tc-1', 'tool'))
+      processor.processChunk(ev.toolEnd('tc-1', 'tool'))
+      processor.processChunk(
+        chunk(EventType.TOOL_CALL_RESULT, {
+          messageId: 'tool-result-1',
+          toolCallId: 'tc-1',
+          content: wireContent,
+          role: 'tool',
+        }),
+      )
+      const parts = processor.getMessages()[0]?.parts ?? []
+      return {
+        toolCallPart: parts.find((p) => p.type === 'tool-call') as ToolCallPart,
+        toolResultPart: parts.find(
+          (p) => p.type === 'tool-result',
+        ) as ToolResultPart,
+      }
+    }
+
+    it('restores a JSON-stringified multimodal ContentPart array from the wire', () => {
       const parts = [
         {
           type: 'image',
@@ -4325,56 +4347,19 @@ describe('StreamProcessor', () => {
         { type: 'text', content: 'legend' },
       ]
 
-      processor.processChunk(ev.runStarted())
-      processor.processChunk(ev.textStart())
-      processor.processChunk(ev.toolStart('tc-1', 'search_images'))
-      processor.processChunk(ev.toolEnd('tc-1', 'search_images'))
-      processor.processChunk(
-        chunk(EventType.TOOL_CALL_RESULT, {
-          messageId: 'tool-result-1',
-          toolCallId: 'tc-1',
-          content: JSON.stringify(parts),
-          role: 'tool',
-        }),
+      const { toolCallPart, toolResultPart } = resultParts(
+        JSON.stringify(parts),
       )
-
-      const messages = processor.getMessages()
-      const toolCallPart = messages[0]?.parts.find(
-        (p) => p.type === 'tool-call',
-      ) as ToolCallPart
       expect(toolCallPart.output).toEqual(parts)
-
-      const toolResultPart = messages[0]?.parts.find(
-        (p) => p.type === 'tool-result',
-      ) as ToolResultPart
       expect(toolResultPart.content).toEqual(parts)
     })
 
     it('collapses a text-only ContentPart array to its string content', () => {
-      const processor = new StreamProcessor()
-
-      processor.processChunk(ev.runStarted())
-      processor.processChunk(ev.textStart())
-      processor.processChunk(ev.toolStart('tc-1', 'read_skill'))
-      processor.processChunk(ev.toolEnd('tc-1', 'read_skill'))
-      processor.processChunk(
-        chunk(EventType.TOOL_CALL_RESULT, {
-          messageId: 'tool-result-1',
-          toolCallId: 'tc-1',
-          content: JSON.stringify([{ type: 'text', content: 'SKILL BODY' }]),
-          role: 'tool',
-        }),
+      const { toolCallPart, toolResultPart } = resultParts(
+        JSON.stringify([{ type: 'text', content: 'SKILL BODY' }]),
       )
-
-      const messages = processor.getMessages()
-      const toolResultPart = messages[0]?.parts.find(
-        (p) => p.type === 'tool-result',
-      ) as ToolResultPart
-      expect(toolResultPart.content).toBe('SKILL BODY')
-      const toolCallPart = messages[0]?.parts.find(
-        (p) => p.type === 'tool-call',
-      ) as ToolCallPart
       expect(toolCallPart.output).toBe('SKILL BODY')
+      expect(toolResultPart.content).toBe('SKILL BODY')
     })
 
     it('should mark output-error tool results as errored message parts', () => {
