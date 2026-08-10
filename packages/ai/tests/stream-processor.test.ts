@@ -4781,4 +4781,67 @@ describe('StreamProcessor', () => {
       expect((textPart as { content: string }).content).toBe('resumed')
     })
   })
+
+  describe('server message id adoption', () => {
+    // Each turn opens with reasoning, which auto-creates the assistant
+    // message under a client-minted id.
+    const reasoningTurn = (...chunks: Array<StreamChunk>) => {
+      const processor = new StreamProcessor()
+      processor.processChunk(ev.runStarted())
+      processor.processChunk(
+        chunk(EventType.REASONING_MESSAGE_CONTENT, {
+          messageId: 'r-1',
+          delta: 'Thinking...',
+        }),
+      )
+      for (const c of chunks) processor.processChunk(c)
+      return processor.getMessages().filter((m) => m.role === 'assistant')
+    }
+    const hasToolCall = (msg: UIMessage) =>
+      msg.parts.some((p) => p.type === 'tool-call' && p.id === 'tc-1')
+
+    it('reasoning-then-tool-call adopts the server parentMessageId', () => {
+      const assistants = reasoningTurn(
+        chunk(EventType.TOOL_CALL_START, {
+          toolCallId: 'tc-1',
+          toolCallName: 'search',
+          toolName: 'search',
+          parentMessageId: 'server-msg-1',
+        }),
+        ev.toolArgs('tc-1', '{"q":"x"}'),
+        ev.toolEnd('tc-1', 'search'),
+        ev.runFinished('tool_calls'),
+      )
+
+      expect(assistants).toHaveLength(1)
+      expect(assistants[0]!.id).toBe('server-msg-1')
+      expect(hasToolCall(assistants[0]!)).toBe(true)
+      expect(assistants[0]!.parts.some((p) => p.type === 'thinking')).toBe(true)
+    })
+
+    it('reasoning-then-text adopts the server messageId', () => {
+      const assistants = reasoningTurn(
+        ev.textStart('server-msg-1'),
+        ev.textContent('Answer', 'server-msg-1'),
+        ev.textEnd('server-msg-1'),
+        ev.runFinished(),
+      )
+
+      expect(assistants).toHaveLength(1)
+      expect(assistants[0]!.id).toBe('server-msg-1')
+    })
+
+    it('a turn with no server id keeps the client id', () => {
+      const assistants = reasoningTurn(
+        ev.toolStart('tc-1', 'search'),
+        ev.toolArgs('tc-1', '{"q":"x"}'),
+        ev.toolEnd('tc-1', 'search'),
+        ev.runFinished('tool_calls'),
+      )
+
+      expect(assistants).toHaveLength(1)
+      expect(assistants[0]!.id).toMatch(/^msg-/)
+      expect(hasToolCall(assistants[0]!)).toBe(true)
+    })
+  })
 })
