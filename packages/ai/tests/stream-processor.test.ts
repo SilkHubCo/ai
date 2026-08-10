@@ -4315,6 +4315,68 @@ describe('StreamProcessor', () => {
       expect(toolResultPart.state).toBe('complete')
     })
 
+    it('restores a JSON-stringified multimodal ContentPart array from the wire', () => {
+      const processor = new StreamProcessor()
+      const parts = [
+        {
+          type: 'image',
+          source: { type: 'data', value: 'aGk=', mimeType: 'image/png' },
+        },
+        { type: 'text', content: 'legend' },
+      ]
+
+      processor.processChunk(ev.runStarted())
+      processor.processChunk(ev.textStart())
+      processor.processChunk(ev.toolStart('tc-1', 'search_images'))
+      processor.processChunk(ev.toolEnd('tc-1', 'search_images'))
+      processor.processChunk(
+        chunk(EventType.TOOL_CALL_RESULT, {
+          messageId: 'tool-result-1',
+          toolCallId: 'tc-1',
+          content: JSON.stringify(parts),
+          role: 'tool',
+        }),
+      )
+
+      const messages = processor.getMessages()
+      const toolCallPart = messages[0]?.parts.find(
+        (p) => p.type === 'tool-call',
+      ) as ToolCallPart
+      expect(toolCallPart.output).toEqual(parts)
+
+      const toolResultPart = messages[0]?.parts.find(
+        (p) => p.type === 'tool-result',
+      ) as ToolResultPart
+      expect(toolResultPart.content).toEqual(parts)
+    })
+
+    it('collapses a text-only ContentPart array to its string content', () => {
+      const processor = new StreamProcessor()
+
+      processor.processChunk(ev.runStarted())
+      processor.processChunk(ev.textStart())
+      processor.processChunk(ev.toolStart('tc-1', 'read_skill'))
+      processor.processChunk(ev.toolEnd('tc-1', 'read_skill'))
+      processor.processChunk(
+        chunk(EventType.TOOL_CALL_RESULT, {
+          messageId: 'tool-result-1',
+          toolCallId: 'tc-1',
+          content: JSON.stringify([{ type: 'text', content: 'SKILL BODY' }]),
+          role: 'tool',
+        }),
+      )
+
+      const messages = processor.getMessages()
+      const toolResultPart = messages[0]?.parts.find(
+        (p) => p.type === 'tool-result',
+      ) as ToolResultPart
+      expect(toolResultPart.content).toBe('SKILL BODY')
+      const toolCallPart = messages[0]?.parts.find(
+        (p) => p.type === 'tool-call',
+      ) as ToolCallPart
+      expect(toolCallPart.output).toBe('SKILL BODY')
+    })
+
     it('should mark output-error tool results as errored message parts', () => {
       const processor = new StreamProcessor()
 

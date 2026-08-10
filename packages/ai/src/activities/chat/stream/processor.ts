@@ -22,7 +22,10 @@ import {
   generateMessageId,
   uiMessageToModelMessages,
 } from '../messages.js'
-import { normalizeToolResult } from '../../../utilities/tool-result'
+import {
+  normalizeToolResult,
+  restoreToolResultContent,
+} from '../../../utilities/tool-result'
 import { isProviderExecutedToolCall } from '../../../utilities/provider-executed'
 import { defaultJSONParser } from './json-parser'
 import {
@@ -1447,15 +1450,18 @@ export class StreamProcessor {
     if (chunk.result) {
       // Step 1: Update the tool-call part's output field (for UI consistency
       // with client tools — see GitHub issue #176)
+      const content = Array.isArray(chunk.result)
+        ? chunk.result
+        : restoreToolResultContent(chunk.result)
       let output: unknown
-      if (Array.isArray(chunk.result)) {
-        output = chunk.result
-      } else {
+      if (typeof content === 'string') {
         try {
-          output = JSON.parse(chunk.result)
+          output = JSON.parse(content)
         } catch {
-          output = chunk.result
+          output = content
         }
+      } else {
+        output = content
       }
       this.messages = updateToolCallWithOutput(
         this.messages,
@@ -1471,7 +1477,7 @@ export class StreamProcessor {
         this.messages,
         messageId,
         chunk.toolCallId,
-        chunk.result,
+        content,
         resultState,
         resultState === 'error'
           ? this.extractToolResultError(output)
@@ -1507,11 +1513,16 @@ export class StreamProcessor {
     if (!messageId) return
 
     // Step 1: Update the tool-call part's output field
+    const content = restoreToolResultContent(chunk.content)
     let output: unknown
-    try {
-      output = JSON.parse(chunk.content)
-    } catch {
-      output = chunk.content
+    if (typeof content === 'string') {
+      try {
+        output = JSON.parse(content)
+      } catch {
+        output = content
+      }
+    } else {
+      output = content
     }
     this.messages = updateToolCallWithOutput(
       this.messages,
@@ -1527,7 +1538,7 @@ export class StreamProcessor {
       this.messages,
       messageId,
       chunk.toolCallId,
-      chunk.content,
+      content,
       resultState,
       resultState === 'error' ? this.extractToolResultError(output) : undefined,
     )
