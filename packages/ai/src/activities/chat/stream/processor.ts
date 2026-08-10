@@ -22,7 +22,10 @@ import {
   generateMessageId,
   uiMessageToModelMessages,
 } from '../messages.js'
-import { normalizeToolResult } from '../../../utilities/tool-result'
+import {
+  normalizeToolResult,
+  parseToolResultWire,
+} from '../../../utilities/tool-result'
 import { isProviderExecutedToolCall } from '../../../utilities/provider-executed'
 import { defaultJSONParser } from './json-parser'
 import {
@@ -1431,16 +1434,7 @@ export class StreamProcessor {
     if (chunk.result) {
       // Step 1: Update the tool-call part's output field (for UI consistency
       // with client tools — see GitHub issue #176)
-      let output: unknown
-      if (Array.isArray(chunk.result)) {
-        output = chunk.result
-      } else {
-        try {
-          output = JSON.parse(chunk.result)
-        } catch {
-          output = chunk.result
-        }
-      }
+      const { content, output } = parseToolResultWire(chunk.result)
       this.messages = updateToolCallWithOutput(
         this.messages,
         chunk.toolCallId,
@@ -1455,7 +1449,7 @@ export class StreamProcessor {
         this.messages,
         messageId,
         chunk.toolCallId,
-        chunk.result,
+        content,
         resultState,
         resultState === 'error'
           ? this.extractToolResultError(output)
@@ -1491,12 +1485,7 @@ export class StreamProcessor {
     if (!messageId) return
 
     // Step 1: Update the tool-call part's output field
-    let output: unknown
-    try {
-      output = JSON.parse(chunk.content)
-    } catch {
-      output = chunk.content
-    }
+    const { content, output } = parseToolResultWire(chunk.content)
     this.messages = updateToolCallWithOutput(
       this.messages,
       chunk.toolCallId,
@@ -1511,7 +1500,7 @@ export class StreamProcessor {
       this.messages,
       messageId,
       chunk.toolCallId,
-      chunk.content,
+      content,
       resultState,
       resultState === 'error' ? this.extractToolResultError(output) : undefined,
     )

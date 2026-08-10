@@ -4315,6 +4315,53 @@ describe('StreamProcessor', () => {
       expect(toolResultPart.state).toBe('complete')
     })
 
+    const resultParts = (wireContent: string) => {
+      const processor = new StreamProcessor()
+      processor.processChunk(ev.runStarted())
+      processor.processChunk(ev.textStart())
+      processor.processChunk(ev.toolStart('tc-1', 'tool'))
+      processor.processChunk(ev.toolEnd('tc-1', 'tool'))
+      processor.processChunk(
+        chunk(EventType.TOOL_CALL_RESULT, {
+          messageId: 'tool-result-1',
+          toolCallId: 'tc-1',
+          content: wireContent,
+          role: 'tool',
+        }),
+      )
+      const parts = processor.getMessages()[0]?.parts ?? []
+      return {
+        toolCallPart: parts.find((p) => p.type === 'tool-call') as ToolCallPart,
+        toolResultPart: parts.find(
+          (p) => p.type === 'tool-result',
+        ) as ToolResultPart,
+      }
+    }
+
+    it('restores a JSON-stringified multimodal ContentPart array from the wire', () => {
+      const parts = [
+        {
+          type: 'image',
+          source: { type: 'data', value: 'aGk=', mimeType: 'image/png' },
+        },
+        { type: 'text', content: 'legend' },
+      ]
+
+      const { toolCallPart, toolResultPart } = resultParts(
+        JSON.stringify(parts),
+      )
+      expect(toolCallPart.output).toEqual(parts)
+      expect(toolResultPart.content).toEqual(parts)
+    })
+
+    it('collapses a text-only ContentPart array to its string content', () => {
+      const { toolCallPart, toolResultPart } = resultParts(
+        JSON.stringify([{ type: 'text', content: 'SKILL BODY' }]),
+      )
+      expect(toolCallPart.output).toBe('SKILL BODY')
+      expect(toolResultPart.content).toBe('SKILL BODY')
+    })
+
     it('should mark output-error tool results as errored message parts', () => {
       const processor = new StreamProcessor()
 

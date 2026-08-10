@@ -58,3 +58,46 @@ export function normalizeToolResult(
   if (isContentPartArray(result)) return result
   return JSON.stringify(result)
 }
+
+/**
+ * Undo the wire stringification of a tool result: TOOL_CALL_END.result and
+ * TOOL_CALL_RESULT.content are string-only per the AG-UI spec, so a multimodal
+ * ContentPart array crosses the stream as JSON. Restore genuinely multimodal
+ * arrays; collapse text-only arrays to their joined string (the legacy shape);
+ * return anything else unchanged.
+ */
+export function restoreToolResultContent(
+  wireContent: string,
+): string | Array<ContentPart> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(wireContent)
+  } catch {
+    return wireContent
+  }
+  if (!isContentPartArray(parsed)) return wireContent
+  if (parsed.some((part) => part.type !== 'text')) return parsed
+  return parsed
+    .map((part) => (part.type === 'text' ? part.content : ''))
+    .join('')
+}
+
+/**
+ * Split a wire tool result into the two shapes the processor writes: `content`
+ * for the tool-result part (multimodal restored) and `output` for the
+ * tool-call part (JSON parsed when the content is a plain string).
+ */
+export function parseToolResultWire(wireResult: string | Array<ContentPart>): {
+  content: string | Array<ContentPart>
+  output: unknown
+} {
+  const content = Array.isArray(wireResult)
+    ? wireResult
+    : restoreToolResultContent(wireResult)
+  if (typeof content !== 'string') return { content, output: content }
+  try {
+    return { content, output: JSON.parse(content) }
+  } catch {
+    return { content, output: content }
+  }
+}
