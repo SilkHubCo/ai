@@ -1,4 +1,4 @@
-name: Publish SilkHub packages
+name: Publish Pretty packages
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   publish:
-    if: github.repository == 'SilkHubCo/ai'
+    if: github.repository == 'make-pretty/ai'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -28,7 +28,7 @@ jobs:
           node-version-file: .nvmrc
           package-manager-cache: false
           registry-url: https://npm.pkg.github.com/
-          scope: '@silkhubco'
+          scope: '@make-pretty'
       - name: Select package
         run: |
           case "$GITHUB_REF_NAME" in
@@ -38,7 +38,7 @@ jobs:
                 echo "PACKAGE_DIR=packages/ai"
                 echo "PACKAGE_SLUG=ai"
                 echo "TAG_PREFIX=ai-v"
-                echo "RELEASE_TITLE=@silkhubco/ai"
+                echo "RELEASE_TITLE=@make-pretty/ai"
               } >> "$GITHUB_ENV"
               ;;
             ai-anthropic-v*)
@@ -47,7 +47,7 @@ jobs:
                 echo "PACKAGE_DIR=packages/ai-anthropic"
                 echo "PACKAGE_SLUG=ai-anthropic"
                 echo "TAG_PREFIX=ai-anthropic-v"
-                echo "RELEASE_TITLE=@silkhubco/ai-anthropic"
+                echo "RELEASE_TITLE=@make-pretty/ai-anthropic"
               } >> "$GITHUB_ENV"
               ;;
             *)
@@ -73,13 +73,13 @@ jobs:
           pnpm --filter "$PACKAGE_NAME" test:oxlint
           pnpm --filter "$PACKAGE_NAME" build
           pnpm --filter "$PACKAGE_NAME" test:build
-      - name: Prepare SilkHub package identity
-        run: npm pkg set "name=$RELEASE_TITLE" --prefix "$PACKAGE_DIR"
+      - name: Prepare Pretty package identity
+        run: npm pkg set "name=$RELEASE_TITLE" "repository.url=git+https://github.com/$GITHUB_REPOSITORY.git" --prefix "$PACKAGE_DIR"
       - name: Pack release archive
         run: |
           package_version=$(node -p "require('./$PACKAGE_DIR/package.json').version")
           pnpm --dir "$PACKAGE_DIR" pack --pack-destination "$RUNNER_TEMP"
-          echo "PACKAGE_ARCHIVE=$RUNNER_TEMP/silkhubco-$PACKAGE_SLUG-$package_version.tgz" >> "$GITHUB_ENV"
+          echo "PACKAGE_ARCHIVE=$RUNNER_TEMP/make-pretty-$PACKAGE_SLUG-$package_version.tgz" >> "$GITHUB_ENV"
       - name: Publish package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
