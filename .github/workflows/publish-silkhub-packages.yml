@@ -5,6 +5,7 @@ on:
     tags:
       - 'ai-v*'
       - 'ai-anthropic-v*'
+      - 'openai-base-v*'
 
 permissions:
   contents: write
@@ -48,6 +49,15 @@ jobs:
                 echo "PACKAGE_SLUG=ai-anthropic"
                 echo "TAG_PREFIX=ai-anthropic-v"
                 echo "RELEASE_TITLE=@make-pretty/ai-anthropic"
+              } >> "$GITHUB_ENV"
+              ;;
+            openai-base-v*)
+              {
+                echo "PACKAGE_NAME=@tanstack/openai-base"
+                echo "PACKAGE_DIR=packages/openai-base"
+                echo "PACKAGE_SLUG=openai-base"
+                echo "TAG_PREFIX=openai-base-v"
+                echo "RELEASE_TITLE=@make-pretty/openai-base"
               } >> "$GITHUB_ENV"
               ;;
             *)

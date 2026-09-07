@@ -18,8 +18,10 @@ import type {
   Response,
   ResponseCreateParams,
   ResponseFunctionCallOutputItem,
+  ResponseFunctionToolCall,
   ResponseInput,
   ResponseInputContent,
+  ResponseReasoningItem,
   ResponseStreamEvent,
 } from 'openai/resources/responses/responses'
 import type {
@@ -30,6 +32,64 @@ import type {
   StreamChunk,
   TextOptions,
 } from '@tanstack/ai'
+
+type FunctionCallState = {
+  callId: string
+  index: number
+  name: string
+  started: boolean
+  ended?: boolean
+  pendingArguments?: string | undefined
+}
+
+type OpenAIToolCallMetadata = {
+  itemId?: string
+  openaiReasoning?: Array<
+    Pick<ResponseReasoningItem, 'type' | 'id' | 'summary'> & {
+      encrypted_content: string
+    }
+  >
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function parseOpenAIToolCallMetadata(
+  value: unknown,
+): OpenAIToolCallMetadata | undefined {
+  if (!isRecord(value)) return undefined
+  if (!('itemId' in value) && !('openaiReasoning' in value)) return undefined
+  if (
+    'itemId' in value &&
+    (typeof value.itemId !== 'string' || !value.itemId)
+  ) {
+    throw new Error('OpenAI tool call metadata has an invalid itemId')
+  }
+  if (
+    'openaiReasoning' in value &&
+    (!Array.isArray(value.openaiReasoning) ||
+      !value.openaiReasoning.every(
+        (item: unknown) =>
+          isRecord(item) &&
+          item.type === 'reasoning' &&
+          typeof item.id === 'string' &&
+          item.id.length > 0 &&
+          typeof item.encrypted_content === 'string' &&
+          item.encrypted_content.length > 0 &&
+          Array.isArray(item.summary) &&
+          item.summary.every(
+            (part: unknown) =>
+              isRecord(part) &&
+              part.type === 'summary_text' &&
+              typeof part.text === 'string',
+          ),
+      ))
+  ) {
+    throw new Error('OpenAI tool call metadata has invalid reasoning items')
+  }
+  return value as OpenAIToolCallMetadata
+}
 
 /**
  * Shared implementation of the OpenAI Responses API. Holds the stream-event
@@ -64,26 +124,8 @@ export abstract class OpenAIBaseResponsesTextAdapter<
   async *chatStream(
     options: TextOptions<TProviderOptions>,
   ): AsyncIterable<StreamChunk> {
-    // Track tool call metadata by unique ID
-    // Responses API streams tool calls with deltas — first chunk has ID/name,
-    // subsequent chunks only have args.
-    // We assign our own indices as we encounter unique tool call IDs.
-    const toolCallMetadata = new Map<
-      string,
-      {
-        index: number
-        name: string
-        started: boolean
-        // Set once TOOL_CALL_END has been emitted (via args.done or the
-        // output_item.done backfill) so the two paths don't double-emit.
-        ended?: boolean
-        // Set when args.done arrives before TOOL_CALL_START could fire
-        // (output_item.added lacked a name). output_item.done picks these
-        // up to emit the missing END. Allow explicit `undefined` so the
-        // emission paths can re-clear the slot after handing it off.
-        pendingArguments?: string
-      }
-    >()
+    // Argument deltas reference the output item ID, not the call_id used by tool results.
+    const toolCallMetadata = new Map<string, FunctionCallState>()
 
     // AG-UI lifecycle tracking
     const aguiState = {
@@ -759,16 +801,7 @@ export abstract class OpenAIBaseResponsesTextAdapter<
    */
   protected async *processStreamChunks(
     stream: AsyncIterable<ResponseStreamEvent>,
-    toolCallMetadata: Map<
-      string,
-      {
-        index: number
-        name: string
-        started: boolean
-        ended?: boolean
-        pendingArguments?: string | undefined
-      }
-    >,
+    toolCallMetadata: Map<string, FunctionCallState>,
     options: TextOptions<TProviderOptions>,
     aguiState: {
       runId: string
@@ -779,6 +812,47 @@ export abstract class OpenAIBaseResponsesTextAdapter<
   ): AsyncIterable<StreamChunk> {
     let accumulatedContent = ''
     let accumulatedReasoning = ''
+    const pendingReasoning: Array<ResponseReasoningItem> = []
+    const capturedReasoning = new Set<string>()
+    const captureReasoning = (item: ResponseReasoningItem) => {
+      if (!item.encrypted_content || capturedReasoning.has(item.id)) return
+      capturedReasoning.add(item.id)
+      pendingReasoning.push({
+        type: 'reasoning',
+        id: item.id,
+        summary: item.summary,
+        encrypted_content: item.encrypted_content,
+      })
+    }
+    const takeReasoning = () =>
+      pendingReasoning.length > 0
+        ? { openaiReasoning: pendingReasoning.splice(0) }
+        : {}
+    const rememberFunctionCall = ({
+      item,
+      index,
+    }: {
+      item: ResponseFunctionToolCall
+      index: number
+    }): FunctionCallState => {
+      if (!item.id)
+        throw new Error('Function call is missing its output item ID')
+      if (!item.call_id)
+        throw new Error(`Function call ${item.id} is missing call_id`)
+      let metadata = toolCallMetadata.get(item.id)
+      if (!metadata) {
+        metadata = {
+          callId: item.call_id,
+          index,
+          name: item.name || '',
+          started: false,
+        }
+        toolCallMetadata.set(item.id, metadata)
+      } else if (!metadata.name && item.name) {
+        metadata.name = item.name
+      }
+      return metadata
+    }
 
     // Track if we've been streaming deltas to avoid duplicating content from done events
     let hasStreamedContentDeltas = false
@@ -1174,30 +1248,16 @@ export abstract class OpenAIBaseResponsesTextAdapter<
         // handle output_item.added to capture function call metadata (name)
         if (chunk.type === 'response.output_item.added') {
           const item = chunk.item
-          if (item.type === 'function_call' && item.id) {
-            // Track the item as soon as we see it so subsequent arg deltas
-            // aren't logged as orphans, but only emit TOOL_CALL_START when
-            // both id AND name are populated. Emitting START with an empty
-            // name would propagate into TOOL_CALL_END (which reads the same
-            // metadata) and route the tool call to whatever name happens to
-            // match `''` downstream — a silent misroute.
-            let metadata = toolCallMetadata.get(item.id)
-            if (!metadata) {
-              metadata = {
-                index: chunk.output_index,
-                name: item.name || '',
-                started: false,
-              }
-              toolCallMetadata.set(item.id, metadata)
-            } else if (!metadata.name && item.name) {
-              // A later output_item.added for the same id finally carries
-              // the name. Update so the gated emission below can fire.
-              metadata.name = item.name
-            }
+          if (item.type === 'function_call') {
+            const metadata = rememberFunctionCall({
+              item,
+              index: chunk.output_index,
+            })
             if (!metadata.started && metadata.name) {
               yield {
                 type: EventType.TOOL_CALL_START,
-                toolCallId: item.id,
+                toolCallId: metadata.callId,
+                metadata: { itemId: item.id, ...takeReasoning() },
                 toolCallName: metadata.name,
                 toolName: metadata.name,
                 parentMessageId: aguiState.messageId,
@@ -1240,7 +1300,7 @@ export abstract class OpenAIBaseResponsesTextAdapter<
           }
           yield {
             type: EventType.TOOL_CALL_ARGS,
-            toolCallId: chunk.item_id,
+            toolCallId: metadata.callId,
             model: model || options.model,
             timestamp: Date.now(),
             delta: chunk.delta,
@@ -1308,7 +1368,7 @@ export abstract class OpenAIBaseResponsesTextAdapter<
 
           yield {
             type: EventType.TOOL_CALL_END,
-            toolCallId: item_id,
+            toolCallId: metadata.callId,
             toolCallName: name,
             toolName: name,
             model: model || options.model,
@@ -1324,22 +1384,18 @@ export abstract class OpenAIBaseResponsesTextAdapter<
         // whose START + END therefore never fired).
         if (chunk.type === 'response.output_item.done') {
           const item = chunk.item
-          if (item.type === 'function_call' && item.id) {
-            const metadata = toolCallMetadata.get(item.id) ?? {
+          if (item.type === 'reasoning') captureReasoning(item)
+          if (item.type === 'function_call') {
+            const metadata = rememberFunctionCall({
+              item,
               index: chunk.output_index,
-              name: item.name || '',
-              started: false,
-            }
-            if (!toolCallMetadata.has(item.id)) {
-              toolCallMetadata.set(item.id, metadata)
-            } else if (!metadata.name && item.name) {
-              metadata.name = item.name
-            }
+            })
             // Emit gated START if we now have a name and never started.
             if (!metadata.started && metadata.name) {
               yield {
                 type: EventType.TOOL_CALL_START,
-                toolCallId: item.id,
+                toolCallId: metadata.callId,
+                metadata: { itemId: item.id, ...takeReasoning() },
                 toolCallName: metadata.name,
                 toolName: metadata.name,
                 parentMessageId: aguiState.messageId,
@@ -1382,7 +1438,7 @@ export abstract class OpenAIBaseResponsesTextAdapter<
               }
               yield {
                 type: EventType.TOOL_CALL_END,
-                toolCallId: item.id,
+                toolCallId: metadata.callId,
                 toolCallName: name,
                 toolName: name,
                 model: model || options.model,
@@ -1403,22 +1459,15 @@ export abstract class OpenAIBaseResponsesTextAdapter<
           // be silently dropped from the AG-UI stream while `hasFunctionCalls`
           // below still routes the run's finishReason to 'tool_calls' —
           // leaving consumers waiting for tool results they never saw start.
-          for (const item of chunk.response.output) {
-            if (item.type !== 'function_call' || !item.id) continue
-            const metadata = toolCallMetadata.get(item.id) ?? {
-              index: 0,
-              name: item.name || '',
-              started: false,
-            }
-            if (!toolCallMetadata.has(item.id)) {
-              toolCallMetadata.set(item.id, metadata)
-            } else if (!metadata.name && item.name) {
-              metadata.name = item.name
-            }
+          for (const [index, item] of chunk.response.output.entries()) {
+            if (item.type === 'reasoning') captureReasoning(item)
+            if (item.type !== 'function_call') continue
+            const metadata = rememberFunctionCall({ item, index })
             if (!metadata.started && metadata.name) {
               yield {
                 type: EventType.TOOL_CALL_START,
-                toolCallId: item.id,
+                toolCallId: metadata.callId,
+                metadata: { itemId: item.id, ...takeReasoning() },
                 toolCallName: metadata.name,
                 toolName: metadata.name,
                 parentMessageId: aguiState.messageId,
@@ -1459,7 +1508,7 @@ export abstract class OpenAIBaseResponsesTextAdapter<
               }
               yield {
                 type: EventType.TOOL_CALL_END,
-                toolCallId: item.id,
+                toolCallId: metadata.callId,
                 toolCallName: name,
                 toolName: name,
                 model: model || options.model,
@@ -1725,9 +1774,19 @@ export abstract class OpenAIBaseResponsesTextAdapter<
               typeof toolCall.function.arguments === 'string'
                 ? toolCall.function.arguments
                 : JSON.stringify(toolCall.function.arguments)
+            const metadata = parseOpenAIToolCallMetadata(toolCall.metadata)
+            for (const item of metadata?.openaiReasoning ?? []) {
+              result.push({
+                type: 'reasoning',
+                id: item.id,
+                summary: item.summary,
+                encrypted_content: item.encrypted_content,
+              })
+            }
 
             result.push({
               type: 'function_call',
+              ...(metadata?.itemId && { id: metadata.itemId }),
               call_id: toolCall.id,
               name: toolCall.function.name,
               arguments: argumentsString,
