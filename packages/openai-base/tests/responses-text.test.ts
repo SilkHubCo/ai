@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { OpenAIBaseResponsesTextAdapter } from '../src/adapters/responses-text'
 import type OpenAI from 'openai'
+import type { ResponseOutputItem } from 'openai/resources/responses/responses'
 import { EventType } from '@tanstack/ai'
 import type { StreamChunk, Tool } from '@tanstack/ai'
 import { resolveDebugOption } from '@tanstack/ai/adapter-internals'
@@ -686,6 +687,7 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
           item: {
             type: 'function_call',
             id: 'call_abc123',
+            call_id: 'call_abc123',
             name: 'lookup_weather',
           },
         },
@@ -714,6 +716,7 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
               {
                 type: 'function_call',
                 id: 'call_abc123',
+                call_id: 'call_abc123',
                 name: 'lookup_weather',
                 arguments: '{"location":"Berlin"}',
               },
@@ -792,6 +795,7 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
           item: {
             type: 'function_call',
             id: 'call_tf',
+            call_id: 'call_tf',
             name: 'lookup_weather',
           },
         },
@@ -816,6 +820,7 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
               {
                 type: 'function_call',
                 id: 'call_tf',
+                call_id: 'call_tf',
                 name: 'lookup_weather',
                 arguments: '{"location":"Berlin"}',
               },
@@ -867,6 +872,7 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
           item: {
             type: 'function_call',
             id: 'call_1',
+            call_id: 'call_1',
             name: 'lookup_weather',
           },
         },
@@ -876,6 +882,7 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
           item: {
             type: 'function_call',
             id: 'call_2',
+            call_id: 'call_2',
             name: 'lookup_weather',
           },
         },
@@ -909,12 +916,14 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
               {
                 type: 'function_call',
                 id: 'call_1',
+                call_id: 'call_1',
                 name: 'lookup_weather',
                 arguments: '{"location":"Berlin"}',
               },
               {
                 type: 'function_call',
                 id: 'call_2',
+                call_id: 'call_2',
                 name: 'lookup_weather',
                 arguments: '{"location":"Paris"}',
               },
@@ -960,7 +969,7 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
       }
     })
 
-    it('uses the internal function_call item id for tool call correlation', async () => {
+    it('correlates tool events by call_id and preserves the output item id', async () => {
       const streamChunks = [
         {
           type: 'response.created',
@@ -1027,27 +1036,19 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
         chunks.push(chunk)
       }
 
-      // TOOL_CALL_* events should use the internal function_call item id
-      // (matches main's OpenAI adapter behavior; the agent loop carries this
-      // id back as `toolCallId` on the tool ModelMessage, which the Responses
-      // API accepts as `call_id` for function_call_output).
       const toolStart = chunks.find((c) => c.type === 'TOOL_CALL_START')
-      expect(toolStart).toBeDefined()
-      if (toolStart?.type === 'TOOL_CALL_START') {
-        expect(toolStart.toolCallId).toBe('fc_internal_001')
-      }
+      expect(toolStart).toMatchObject({
+        toolCallId: 'call_api_abc123',
+        metadata: { itemId: 'fc_internal_001' },
+      })
 
       const toolArgs = chunks.filter((c) => c.type === 'TOOL_CALL_ARGS')
-      expect(toolArgs.length).toBeGreaterThan(0)
-      if (toolArgs[0]?.type === 'TOOL_CALL_ARGS') {
-        expect(toolArgs[0].toolCallId).toBe('fc_internal_001')
-      }
+      expect(toolArgs).toEqual([
+        expect.objectContaining({ toolCallId: 'call_api_abc123' }),
+      ])
 
       const toolEnd = chunks.find((c) => c.type === 'TOOL_CALL_END')
-      expect(toolEnd).toBeDefined()
-      if (toolEnd?.type === 'TOOL_CALL_END') {
-        expect(toolEnd.toolCallId).toBe('fc_internal_001')
-      }
+      expect(toolEnd).toMatchObject({ toolCallId: 'call_api_abc123' })
     })
 
     it('does not emit TOOL_CALL_START until the item carries a name (no empty-name misroute)', async () => {
@@ -1064,7 +1065,11 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
         {
           type: 'response.output_item.added',
           output_index: 0,
-          item: { type: 'function_call', id: 'call_late_name' },
+          item: {
+            type: 'function_call',
+            id: 'call_late_name',
+            call_id: 'call_late_name',
+          },
         },
         // Second added event for the same id finally carries the name
         {
@@ -1073,6 +1078,7 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
           item: {
             type: 'function_call',
             id: 'call_late_name',
+            call_id: 'call_late_name',
             name: 'lookup_weather',
           },
         },
@@ -1091,6 +1097,7 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
               {
                 type: 'function_call',
                 id: 'call_late_name',
+                call_id: 'call_late_name',
                 name: 'lookup_weather',
                 arguments: '{"location":"NYC"}',
               },
@@ -1140,7 +1147,7 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
         {
           type: 'response.output_item.added',
           output_index: 0,
-          item: { type: 'function_call', id: 'fc_bf' },
+          item: { type: 'function_call', id: 'fc_bf', call_id: 'call_bf' },
         },
         // Orphan args deltas + done arrive before name is known.
         {
@@ -1160,6 +1167,7 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
           item: {
             type: 'function_call',
             id: 'fc_bf',
+            call_id: 'call_bf',
             name: 'lookup_weather',
             arguments: '{"location":"NYC"}',
           },
@@ -1174,6 +1182,7 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
               {
                 type: 'function_call',
                 id: 'fc_bf',
+                call_id: 'call_bf',
                 name: 'lookup_weather',
                 arguments: '{"location":"NYC"}',
               },
@@ -1197,6 +1206,11 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
       const ends = chunks.filter((c) => c.type === 'TOOL_CALL_END')
       expect(starts).toHaveLength(1)
       expect(ends).toHaveLength(1)
+      expect(starts[0]).toMatchObject({
+        toolCallId: 'call_bf',
+        metadata: { itemId: 'fc_bf' },
+      })
+      expect(ends[0]).toMatchObject({ toolCallId: 'call_bf' })
       if (starts[0]?.type === 'TOOL_CALL_START') {
         expect(starts[0].toolName).toBe('lookup_weather')
       }
@@ -1222,7 +1236,11 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
         {
           type: 'response.output_item.added',
           output_index: 0,
-          item: { type: 'function_call', id: 'fc_final' },
+          item: {
+            type: 'function_call',
+            id: 'fc_final',
+            call_id: 'call_final',
+          },
         },
         {
           type: 'response.function_call_arguments.done',
@@ -1239,6 +1257,7 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
               {
                 type: 'function_call',
                 id: 'fc_final',
+                call_id: 'call_final',
                 name: 'lookup_weather',
                 arguments: '{"location":"Berlin"}',
               },
@@ -1262,6 +1281,11 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
       const ends = chunks.filter((c) => c.type === 'TOOL_CALL_END')
       expect(starts).toHaveLength(1)
       expect(ends).toHaveLength(1)
+      expect(starts[0]).toMatchObject({
+        toolCallId: 'call_final',
+        metadata: { itemId: 'fc_final' },
+      })
+      expect(ends[0]).toMatchObject({ toolCallId: 'call_final' })
       if (ends[0]?.type === 'TOOL_CALL_END') {
         expect(ends[0].toolName).toBe('lookup_weather')
         expect(ends[0].input).toEqual({ location: 'Berlin' })
@@ -1288,6 +1312,7 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
           item: {
             type: 'function_call',
             id: 'fc_rev',
+            call_id: 'fc_rev',
             name: 'lookup_weather',
           },
         },
@@ -1297,6 +1322,7 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
           item: {
             type: 'function_call',
             id: 'fc_rev',
+            call_id: 'fc_rev',
             name: 'lookup_weather',
             arguments: '{"location":"Tokyo"}',
           },
@@ -1316,6 +1342,7 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
               {
                 type: 'function_call',
                 id: 'fc_rev',
+                call_id: 'fc_rev',
                 name: 'lookup_weather',
                 arguments: '{"location":"Tokyo"}',
               },
@@ -1341,6 +1368,179 @@ describe('OpenAIBaseResponsesTextAdapter', () => {
       expect(ends).toHaveLength(1)
     })
   })
+
+  it.each([
+    ['streamed', 'cipher-1'],
+    ['item-only', 'cipher-1'],
+    ['completed-only', 'final-cipher-1'],
+  ])(
+    'replays reasoning and parallel function calls in output order (%s)',
+    async (mode, expectedCipher) => {
+      const output: Array<ResponseOutputItem> = [
+        {
+          type: 'reasoning',
+          id: 'rs_1',
+          summary: [],
+          encrypted_content: 'cipher-1',
+          status: 'completed',
+        },
+        {
+          type: 'function_call',
+          id: 'fc_1',
+          call_id: 'call_1',
+          name: 'lookup_weather',
+          arguments: '{}',
+        },
+        {
+          type: 'reasoning',
+          id: 'rs_empty',
+          summary: [],
+          encrypted_content: '',
+        },
+        {
+          type: 'reasoning',
+          id: 'rs_2',
+          summary: [{ type: 'summary_text', text: 'Check another city.' }],
+          encrypted_content: 'cipher-2',
+          content: [{ type: 'reasoning_text', text: 'not a replay field' }],
+        },
+        {
+          type: 'function_call',
+          id: 'fc_2',
+          call_id: 'call_2',
+          name: 'lookup_weather',
+          arguments: '{}',
+        },
+      ]
+      setupMockResponsesClient([
+        ...(mode === 'completed-only'
+          ? []
+          : output.flatMap((item, output_index) => [
+              ...(mode === 'streamed'
+                ? [{ type: 'response.output_item.added', output_index, item }]
+                : []),
+              { type: 'response.output_item.done', output_index, item },
+            ])),
+        {
+          type: 'response.completed',
+          response: {
+            model: 'test-model',
+            output: output.map((item) =>
+              item.type === 'reasoning' && item.id === 'rs_1'
+                ? { ...item, encrypted_content: 'final-cipher-1' }
+                : item,
+            ),
+          },
+        },
+      ])
+      const adapter = new TestResponsesAdapter(testConfig, 'test-model')
+      const chunks: Array<StreamChunk> = []
+      for await (const chunk of adapter.chatStream({
+        logger: testLogger,
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'Compare weather.' }],
+        tools: [weatherTool],
+      }))
+        chunks.push(chunk)
+      const calls = chunks.filter((chunk) => chunk.type === 'TOOL_CALL_START')
+      expect(calls).toHaveLength(2)
+
+      setupMockResponsesClient([])
+      for await (const _ of adapter.chatStream({
+        logger: testLogger,
+        model: 'test-model',
+        messages: [
+          {
+            role: 'assistant',
+            content: null,
+            toolCalls: calls.map((call) => ({
+              id: call.toolCallId,
+              type: 'function',
+              function: { name: call.toolName, arguments: '{}' },
+              metadata: call.metadata,
+            })),
+          },
+          { role: 'tool', toolCallId: 'call_1', content: 'Sunny' },
+          { role: 'tool', toolCallId: 'call_2', content: 'Rainy' },
+        ],
+      })) {
+      }
+
+      expect(mockResponsesCreate.mock.calls[0]?.[0].input).toEqual([
+        {
+          type: 'reasoning',
+          id: 'rs_1',
+          summary: [],
+          encrypted_content: expectedCipher,
+        },
+        {
+          type: 'function_call',
+          id: 'fc_1',
+          call_id: 'call_1',
+          name: 'lookup_weather',
+          arguments: '{}',
+        },
+        {
+          type: 'reasoning',
+          id: 'rs_2',
+          summary: [{ type: 'summary_text', text: 'Check another city.' }],
+          encrypted_content: 'cipher-2',
+        },
+        {
+          type: 'function_call',
+          id: 'fc_2',
+          call_id: 'call_2',
+          name: 'lookup_weather',
+          arguments: '{}',
+        },
+        { type: 'function_call_output', call_id: 'call_1', output: 'Sunny' },
+        { type: 'function_call_output', call_id: 'call_2', output: 'Rainy' },
+      ])
+    },
+  )
+
+  it.each([
+    { itemId: '' },
+    {
+      itemId: 'fc_1',
+      openaiReasoning: [
+        { type: 'reasoning', id: 'rs_1', encrypted_content: 'cipher' },
+      ],
+    },
+  ])(
+    'rejects malformed replay metadata before requesting a continuation',
+    async (metadata) => {
+      setupMockResponsesClient([])
+      const adapter = new TestResponsesAdapter(testConfig, 'test-model')
+      const chunks: Array<StreamChunk> = []
+      for await (const chunk of adapter.chatStream({
+        logger: testLogger,
+        model: 'test-model',
+        messages: [
+          {
+            role: 'assistant',
+            content: null,
+            toolCalls: [
+              {
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'lookup_weather', arguments: '{}' },
+                metadata,
+              },
+            ],
+          },
+        ],
+      }))
+        chunks.push(chunk)
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'RUN_ERROR',
+          message: expect.stringContaining('metadata'),
+        }),
+      )
+      expect(mockResponsesCreate).not.toHaveBeenCalled()
+    },
+  )
 
   describe('content_part events', () => {
     it('emits TEXT_MESSAGE_START on content_part.added with output_text', async () => {

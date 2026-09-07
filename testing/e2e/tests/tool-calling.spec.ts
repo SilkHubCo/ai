@@ -17,7 +17,9 @@ for (const provider of providersFor('tool-calling')) {
     }) => {
       await page.goto(featureUrl(provider, 'tool-calling', testId, aimockPort))
 
+      const chatResponse = page.waitForResponse('**/api/chat')
       await sendMessage(page, '[toolcall] what guitars do you have in stock')
+      const response = await chatResponse
       await waitForResponse(page)
 
       const toolCalls = await getToolCalls(page)
@@ -48,6 +50,22 @@ for (const provider of providersFor('tool-calling')) {
 
       // Wait for the text response after tool execution (agentic loop's second LLM call)
       await waitForAssistantText(page, 'Fender Stratocaster')
+
+      if (provider === 'openai') {
+        const events: Array<unknown> = (await response.text())
+          .split('\n')
+          .filter((line) => line.startsWith('data: '))
+          .map((line) => JSON.parse(line.slice(6)))
+        for (const type of [
+          'TOOL_CALL_START',
+          'TOOL_CALL_ARGS',
+          'TOOL_CALL_END',
+        ]) {
+          expect(events).toContainEqual(
+            expect.objectContaining({ type, toolCallId: 'call_guitars_stock' }),
+          )
+        }
+      }
     })
   })
 }

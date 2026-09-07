@@ -8,6 +8,7 @@
       "response": {
         "toolCalls": [
           {
+            "id": "call_guitars_stock",
             "name": "getGuitars",
             "arguments": "{}"
           }
